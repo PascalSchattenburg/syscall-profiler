@@ -15,3 +15,5 @@ results/
 
 # OS
 .DS_Store
+
+.venv/
