@@ -1,0 +1,11 @@
+# Python dependencies for the visualizer (visualize.py).
+#
+# These are ONLY needed for visualization. The C profiler itself has no
+# Python dependency and is built with `make` — you can profile and benchmark
+# without ever creating this virtual environment.
+#
+# Lower bounds are conservative; visualize.py uses only stable, long-standing
+# matplotlib/pandas APIs (pyplot, patches, GridSpec, DataFrame).
+
+matplotlib>=3.5
+pandas>=1.3
