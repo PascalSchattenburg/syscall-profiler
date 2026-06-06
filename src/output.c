@@ -448,6 +448,7 @@ void output_export_csv(syscall_stat_t *stats, int count, const char *filename)
  * --------------------------------------------------------------- */
 void output_export_json(syscall_stat_t *stats, int count,
                         uint64_t total_calls, const char *program,
+                        const char *run_id, const char *timestamp,
                         const char *filename)
 {
     int    i;
@@ -479,6 +480,16 @@ void output_export_json(syscall_stat_t *stats, int count,
     }
 
     fprintf(f, "{\n");
+    /*
+     * PHASE-001: run metadata first, so a reader can identify the run
+     * before parsing the syscall payload. Both fields are optional at
+     * the writer level (NULL -> line omitted) to stay compatible with
+     * any caller that doesn't supply them. Everything below is unchanged.
+     */
+    if (run_id != NULL)
+        fprintf(f, "  \"run_id\": \"%s\",\n", run_id);
+    if (timestamp != NULL)
+        fprintf(f, "  \"timestamp\": \"%s\",\n", timestamp);
     /*
      * VIS-002: record the traced command so the visualizer can show
      * "Program: ls -la" on the charts. We escape backslashes and
@@ -568,6 +579,7 @@ void output_export_json(syscall_stat_t *stats, int count,
  * --------------------------------------------------------------- */
 void output_export_benchmark_json(const char *program,
                                   double untraced_ms, double traced_ms,
+                                  const char *run_id, const char *timestamp,
                                   const char *filename)
 {
     FILE  *f;
@@ -586,6 +598,11 @@ void output_export_benchmark_json(const char *program,
     }
 
     fprintf(f, "{\n");
+    /* PHASE-001: run metadata first (inherited for --benchmark-run). */
+    if (run_id != NULL)
+        fprintf(f, "  \"run_id\": \"%s\",\n", run_id);
+    if (timestamp != NULL)
+        fprintf(f, "  \"timestamp\": \"%s\",\n", timestamp);
     fprintf(f, "  \"program\": \"");
     if (program != NULL) {
         const char *p;

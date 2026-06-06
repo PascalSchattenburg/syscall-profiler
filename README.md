@@ -31,6 +31,7 @@ It is **not** the final university report — that lives in `report/report.md`.
 13. [Visualization System](#13-visualization-system)
 14. [Behavioral Summary Generation](#14-behavioral-summary-generation)
 14a. [Results Management](#14a-results-management)
+14b. [Phase 001 – Run ID System](#14b-phase-001--run-id-system)
 15. [Project Structure](#15-project-structure)
 16. [Source File Overview](#16-source-file-overview)
 17. [Design Decisions](#17-design-decisions)
@@ -802,6 +803,171 @@ After visualization, `results/ls/<timestamp>/` contains the complete set:
 - **Improves long-term maintainability.** Output organization is handled in one
   place with clear, minimal path-management code, separate from the tracing and
   profiling logic.
+
+---
+
+## 14b. Phase 001 – Run ID System
+
+> This section documents the **server-edition** Phase 001 work. It is purely
+> additive metadata: it does **not** change tracing, profiling, decoding,
+> benchmarking, filtering, visualization, the export formats, or the
+> `results/<program>/<timestamp>/` hierarchy described in 14a. Everything that
+> worked before works identically; Phase 001 only labels runs and catalogs them.
+
+Phase 001 prepares the project for future server-side use — a WebUI, an API,
+run management, and historical analysis — by giving every profiling run a
+stable identity and adding a lightweight catalog of runs. No databases, web
+servers, or networking are introduced; this phase is metadata only.
+
+### What a Run ID is
+
+A **Run ID** is a short unique label assigned automatically to each profiling
+run, in the form `run_` followed by eight hexadecimal characters:
+
+```
+run_a8f3d21c
+run_91bc44ff
+run_fa8123de
+```
+
+It is generated once, when a new run directory is created, and then recorded
+in that run's artifacts. The ID carries no meaning of its own — it is simply a
+stable handle that uniquely identifies one run.
+
+### Where the Run ID appears
+
+The Run ID (and the run's timestamp) are added to the **front** of the two
+JSON artifacts, ahead of the existing fields. Nothing else in these files
+changes:
+
+```json
+{
+  "run_id": "run_a8f3d21c",
+  "timestamp": "2026-06-06_11-24-36",
+  "program": "ls",
+  "total_syscalls": 79,
+  "unique_syscalls": 20,
+  "syscalls": [ ... ]
+}
+```
+
+`benchmark.json` gains the same two leading fields.
+
+### Why it exists
+
+Until now a run was identified only by its directory path
+(`results/<program>/<timestamp>/`). That works for browsing files by hand, but
+it is awkward for software: paths are long, contain a program name and a
+timestamp glued together, and are clumsy to pass through a URL or an API call.
+A Run ID gives every run a single, compact, stable identifier that a future
+WebUI or API can use as a key — for example to request one run, link to it, or
+compare two runs — without parsing directory paths.
+
+### How a benchmark relates to a Run ID
+
+A benchmark **belongs to** the profiling run it measures, so it must share that
+run's identity. When a benchmark is attached to an existing run with
+`--benchmark-run <run-directory>`, it **inherits** the `run_id` and `timestamp`
+from that run's `profile.json` and writes them into `benchmark.json`. A
+benchmark never invents a new Run ID for an existing run.
+
+For older runs created before Phase 001 — whose `profile.json` has no `run_id`
+or `timestamp` yet — `--benchmark-run` does not fail. It reconstructs the
+metadata (generating a Run ID, and recovering the timestamp from the run
+directory's name), prints a short note that it did so, and leaves the original
+`profile.json` untouched.
+
+### The run registry: `results/runs_index.json`
+
+Alongside the per-run directories, the profiler maintains a single catalog
+file at the top of the results tree:
+
+```
+results/
+├── runs_index.json        <- the registry (catalog of all runs)
+├── ls/
+│   └── 2026-06-06_11-24-36/
+│       ├── profile.json
+│       └── ...
+├── find/
+└── ...
+```
+
+Each completed profiling run appends one entry:
+
+```json
+[
+  {
+    "run_id": "run_a8f3d21c",
+    "program": "ls",
+    "timestamp": "2026-06-06_11-24-36",
+    "path": "results/ls/2026-06-06_11-24-36",
+    "total_syscalls": 79,
+    "unique_syscalls": 20
+  },
+  {
+    "run_id": "run_b719fa2e",
+    "program": "find",
+    "timestamp": "2026-06-06_12-02-14",
+    "path": "results/find/2026-06-06_12-02-14",
+    "total_syscalls": 1321,
+    "unique_syscalls": 34
+  }
+]
+```
+
+### Why the registry contains metadata only
+
+The registry is deliberately **not** a second copy of the profiling data. It
+stores only a handful of fields per run — the Run ID, program name, timestamp,
+the path to the run directory, and two summary counts. The full syscall data
+remains stored in exactly one place: inside `results/<program>/<timestamp>/`.
+
+This keeps the design honest and avoids duplication. The detailed data has a
+single source of truth (the run directory); the registry is just an index that
+*points* at it. The `path` field is the link from a catalog entry back to the
+complete artifact set. The two counts (`total_syscalls`, `unique_syscalls`) are
+included only so a listing can show a run's size at a glance without opening it;
+they are computed with the same completed-syscall rule as `profile.json`, so
+they always match.
+
+### Which runs are catalogued
+
+Only **complete profiling runs** — the normal tracing commands — append a
+registry entry:
+
+```bash
+./profiler ls
+./profiler -q ls
+./profiler find /usr -maxdepth 1
+```
+
+A plain `--benchmark` run is **not** added to the registry. It produces a
+`benchmark.json` but no `profile.json`, no syscall totals, and no full profiling
+data, so it is not a profiling run the catalog should list. Likewise
+`--benchmark-run` only attaches a benchmark to an existing run and does not
+create a new catalog entry.
+
+The registry is written atomically (to a temporary file that is then renamed
+into place) and is only ever appended to, so existing entries are never
+overwritten and an interrupted write cannot corrupt the catalog.
+
+### Future WebUI and API benefits
+
+The catalog is the foundation for the server edition's future features:
+
+- **Fast listing.** A WebUI or API can read one small file,
+  `results/runs_index.json`, to list every run, instead of recursively scanning
+  thousands of directories on disk.
+- **Stable addressing.** Each run has a Run ID that a URL or API endpoint can
+  use directly (for example to fetch or link to a single run).
+- **Historical analysis.** With every run catalogued by program and time, the
+  server side can compare runs, track a program's behavior over time, or filter
+  runs without touching the bulk syscall data.
+- **Clean separation.** Because the catalog only indexes and never duplicates,
+  the heavy data stays on disk in the run directories and the catalog stays
+  small and quick to read — which scales naturally to a large collection of
+  runs.
 
 ---
 

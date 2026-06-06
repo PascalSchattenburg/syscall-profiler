@@ -73,6 +73,49 @@ static void make_timestamp(char *buf, size_t bufsz)
 }
 
 /* ---------------------------------------------------------------
+ * make_run_id()                                       — PHASE-001
+ *
+ * Write a unique run identifier into buf in the form:
+ *
+ *     run_<8 lowercase hex chars>      e.g. "run_a8f3d21c"
+ *
+ * buf must be at least 13 bytes ("run_" + 8 + NUL). The 32 random
+ * bits come from /dev/urandom when available; if that cannot be
+ * read we fall back to a time+pid seeded rand(), which is good
+ * enough for a per-run label (this is metadata, not a security
+ * token). This helper only produces a string — it does not create
+ * directories, touch tracing, or change any export format.
+ * --------------------------------------------------------------- */
+static void make_run_id(char *buf, size_t bufsz)
+{
+    unsigned char bytes[4];
+    int           got = 0;
+    FILE         *ur  = fopen("/dev/urandom", "rb");
+
+    if (ur != NULL) {
+        if (fread(bytes, 1, sizeof(bytes), ur) == sizeof(bytes))
+            got = 1;
+        fclose(ur);
+    }
+
+    if (!got) {
+        /* Fallback: seed once from time + pid, then pull 4 bytes. */
+        static int seeded = 0;
+        if (!seeded) {
+            srand((unsigned)(time(NULL) ^ (getpid() << 16)));
+            seeded = 1;
+        }
+        bytes[0] = (unsigned char)(rand() & 0xff);
+        bytes[1] = (unsigned char)(rand() & 0xff);
+        bytes[2] = (unsigned char)(rand() & 0xff);
+        bytes[3] = (unsigned char)(rand() & 0xff);
+    }
+
+    snprintf(buf, bufsz, "run_%02x%02x%02x%02x",
+             bytes[0], bytes[1], bytes[2], bytes[3]);
+}
+
+/* ---------------------------------------------------------------
  * basename_of()
  *
  * Derive a clean program name for use as a directory name.
@@ -95,6 +138,158 @@ static void basename_of(const char *program, char *out, size_t outsz)
 
     strncpy(out, name, outsz - 1);
     out[outsz - 1] = '\0';
+}
+
+/* ===============================================================
+ * PHASE-001 — Run registry (results/runs_index.json)
+ *
+ * A lightweight CATALOG of completed profiling runs. It is NOT a
+ * second copy of the syscall data — only per-run metadata, so a
+ * future WebUI/API can list runs without scanning every directory.
+ *
+ * Rules implemented here:
+ *   - one entry is APPENDED per complete profiling run
+ *   - existing entries are never overwritten or duplicated
+ *   - the write is atomic (temp file + rename) so a crash cannot
+ *     corrupt the catalog
+ *
+ * Inline --benchmark and --benchmark-run do NOT call this (they are
+ * not complete profiling runs); only the normal tracing path does.
+ * =============================================================== */
+
+/* Write a single registry object (2-space indented, no trailing
+ * newline). Strings are JSON-escaped for " and \ like our other
+ * writers. */
+static void registry_write_entry(FILE *f,
+                                 const char *run_id, const char *program,
+                                 const char *timestamp, const char *path,
+                                 unsigned long long total_syscalls,
+                                 int unique_syscalls)
+{
+    const char *p;
+
+    fprintf(f, "  {\n");
+    fprintf(f, "    \"run_id\": \"%s\",\n", run_id);
+
+    fprintf(f, "    \"program\": \"");
+    for (p = program; p != NULL && *p != '\0'; p++) {
+        if (*p == '"' || *p == '\\') fputc('\\', f);
+        fputc(*p, f);
+    }
+    fprintf(f, "\",\n");
+
+    fprintf(f, "    \"timestamp\": \"%s\",\n", timestamp);
+
+    fprintf(f, "    \"path\": \"");
+    for (p = path; p != NULL && *p != '\0'; p++) {
+        if (*p == '"' || *p == '\\') fputc('\\', f);
+        fputc(*p, f);
+    }
+    fprintf(f, "\",\n");
+
+    fprintf(f, "    \"total_syscalls\": %llu,\n", total_syscalls);
+    fprintf(f, "    \"unique_syscalls\": %d\n", unique_syscalls);
+    fprintf(f, "  }");
+}
+
+/* Append one entry to <results_dir>/runs_index.json, creating the
+ * file (as a JSON array) on first use. The existing file is spliced
+ * just before its closing ']' so prior entries are preserved. */
+static void registry_append(const char *results_dir,
+                            const char *run_id, const char *program,
+                            const char *timestamp, const char *path,
+                            unsigned long long total_syscalls,
+                            int unique_syscalls)
+{
+    char   idx_path[1100];
+    char   tmp_path[1160];
+    char  *old = NULL;
+    long   old_len = 0;
+    FILE  *rf, *wf;
+    char  *rbrk;
+
+    if ((size_t)snprintf(idx_path, sizeof(idx_path),
+                         "%s/runs_index.json", results_dir) >= sizeof(idx_path))
+        return;
+    if ((size_t)snprintf(tmp_path, sizeof(tmp_path),
+                         "%s.tmp", idx_path) >= sizeof(tmp_path))
+        return;
+
+    /* Read the existing registry, if any */
+    rf = fopen(idx_path, "rb");
+    if (rf != NULL) {
+        fseek(rf, 0, SEEK_END);
+        old_len = ftell(rf);
+        fseek(rf, 0, SEEK_SET);
+        if (old_len > 0) {
+            old = (char *)malloc((size_t)old_len + 1);
+            if (old != NULL) {
+                if (fread(old, 1, (size_t)old_len, rf) != (size_t)old_len) {
+                    free(old); old = NULL;
+                } else {
+                    old[old_len] = '\0';
+                }
+            }
+        }
+        fclose(rf);
+    }
+
+    /* If a non-empty file exists but has no ']' it is unexpected; do
+     * not clobber it — skip the append and warn instead. */
+    rbrk = (old != NULL) ? strrchr(old, ']') : NULL;
+    if (old != NULL && rbrk == NULL) {
+        fprintf(stderr, "  Warning: %s is malformed; skipping registry update.\n",
+                idx_path);
+        free(old);
+        return;
+    }
+
+    wf = fopen(tmp_path, "wb");
+    if (wf == NULL) {
+        perror("registry_append: fopen");
+        free(old);
+        return;
+    }
+
+    if (rbrk == NULL) {
+        /* No existing file: start a fresh array */
+        fprintf(wf, "[\n");
+        registry_write_entry(wf, run_id, program, timestamp, path,
+                             total_syscalls, unique_syscalls);
+        fprintf(wf, "\n]\n");
+    } else {
+        /* Find last non-whitespace char of the array body (before ']') */
+        char *e = rbrk - 1;
+        while (e >= old && (*e == ' ' || *e == '\t' ||
+                            *e == '\n' || *e == '\r'))
+            e--;
+
+        if (e < old) {
+            /* Degenerate; treat as fresh */
+            fprintf(wf, "[\n");
+        } else {
+            /* Copy everything up to and including that char */
+            fwrite(old, 1, (size_t)(e - old + 1), wf);
+            /* '[' => empty array (just a newline); '}' => add a comma */
+            if (*e == '[')
+                fprintf(wf, "\n");
+            else
+                fprintf(wf, ",\n\n");
+        }
+        registry_write_entry(wf, run_id, program, timestamp, path,
+                             total_syscalls, unique_syscalls);
+        fprintf(wf, "\n]\n");
+    }
+
+    fclose(wf);
+    free(old);
+
+    if (rename(tmp_path, idx_path) != 0) {
+        perror("registry_append: rename");
+        remove(tmp_path);
+        return;
+    }
+    printf("  [REGISTRY] Indexed run in %s\n", idx_path);
 }
 
 /* ---------------------------------------------------------------
@@ -220,27 +415,35 @@ static int make_unique_run_dir(const char *path, char *out, size_t outsz)
  * =============================================================== */
 
 /* ---------------------------------------------------------------
- * read_program_from_json()
+ * read_json_string_field()                            — PHASE-001
  *
- * Extract the value of the top-level "program" string field from a
- * profile.json file. This is a minimal, dependency-free reader: it
- * scans for the "program" key and copies the quoted string value,
+ * Extract the value of a top-level string field <key> from a small
+ * JSON file (profile.json). Minimal, dependency-free: it scans for
+ * "<key>", advances past the ':' to the quoted value, and copies it
  * un-escaping \" and \\ (the only escapes our writer emits).
+ *
+ * This generalizes the original read_program_from_json() so the same
+ * logic can also recover "run_id" and "timestamp" for benchmark
+ * inheritance. It does NOT modify the file.
  *
  * Returns:
  *    0  success, value written to out (NUL-terminated)
- *   -1  could not open the file
- *   -2  no "program" field found
+ *   -1  could not open/read the file
+ *   -2  field not found (or malformed)
  * --------------------------------------------------------------- */
-static int read_program_from_json(const char *json_path,
+static int read_json_string_field(const char *json_path, const char *key,
                                   char *out, size_t outsz)
 {
     FILE  *f;
     char  *buf;
     long   size;
-    char  *key;
+    char   quoted[128];
+    char  *hit;
     char  *p;
     size_t oi = 0;
+
+    if ((size_t)snprintf(quoted, sizeof(quoted), "\"%s\"", key) >= sizeof(quoted))
+        return -2;
 
     f = fopen(json_path, "rb");
     if (f == NULL)
@@ -261,12 +464,12 @@ static int read_program_from_json(const char *json_path,
     buf[size] = '\0';
     fclose(f);
 
-    /* Find the "program" key */
-    key = strstr(buf, "\"program\"");
-    if (key == NULL) { free(buf); return -2; }
+    /* Find the "<key>" token */
+    hit = strstr(buf, quoted);
+    if (hit == NULL) { free(buf); return -2; }
 
     /* Advance to the ':' then to the opening quote of the value */
-    p = strchr(key + 9, ':');
+    p = strchr(hit + strlen(quoted), ':');
     if (p == NULL) { free(buf); return -2; }
     p++;
     while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
@@ -287,6 +490,18 @@ static int read_program_from_json(const char *json_path,
 
     free(buf);
     return 0;
+}
+
+/* ---------------------------------------------------------------
+ * read_program_from_json()
+ *
+ * Thin wrapper around read_json_string_field() for the "program"
+ * field, preserving the original interface and return codes.
+ * --------------------------------------------------------------- */
+static int read_program_from_json(const char *json_path,
+                                  char *out, size_t outsz)
+{
+    return read_json_string_field(json_path, "program", out, outsz);
 }
 
 /* ---------------------------------------------------------------
@@ -401,6 +616,61 @@ static int executable_exists(const char *prog)
 }
 
 /* ---------------------------------------------------------------
+ * derive_timestamp_from_dir()                         — PHASE-001
+ *
+ * Legacy fallback for --benchmark-run: when an old profile.json has
+ * no "timestamp" field, recover it from the run directory's own name,
+ * which our layout already encodes as the last path component:
+ *
+ *     results/ls/2026-06-06_11-24-36      -> "2026-06-06_11-24-36"
+ *     results/ls/2026-06-06_11-24-36_2    -> "2026-06-06_11-24-36"
+ *
+ * We accept the leading 19 chars only if they match the expected
+ * "YYYY-MM-DD_HH-MM-SS" shape, so an arbitrary directory name does
+ * not get written as a bogus timestamp. Trailing chars (e.g. the
+ * "_2" collision suffix) are ignored.
+ *
+ * Returns 0 and writes out on success, -1 if no plausible timestamp.
+ * --------------------------------------------------------------- */
+static int derive_timestamp_from_dir(const char *run_dir,
+                                     char *out, size_t outsz)
+{
+    char        base[256];
+    const char *p;
+    size_t      i;
+    /* Digit positions in "YYYY-MM-DD_HH-MM-SS" (others are separators) */
+    static const int digit_pos[] = {0,1,2,3,5,6,8,9,11,12,14,15,17,18};
+
+    /* Strip any trailing '/', then take the final path component */
+    {
+        char tmp[1024];
+        size_t n = strlen(run_dir);
+        while (n > 0 && run_dir[n-1] == '/') n--;
+        if (n == 0 || n >= sizeof(tmp)) return -1;
+        memcpy(tmp, run_dir, n);
+        tmp[n] = '\0';
+        p = strrchr(tmp, '/');
+        p = (p != NULL) ? p + 1 : tmp;
+        if (strlen(p) < 19) return -1;
+        memcpy(base, p, 19);
+        base[19] = '\0';
+    }
+
+    /* Validate the "YYYY-MM-DD_HH-MM-SS" shape */
+    if (base[4]  != '-' || base[7]  != '-' || base[10] != '_' ||
+        base[13] != '-' || base[16] != '-')
+        return -1;
+    for (i = 0; i < sizeof(digit_pos)/sizeof(digit_pos[0]); i++) {
+        char c = base[digit_pos[i]];
+        if (c < '0' || c > '9') return -1;
+    }
+
+    if ((size_t)snprintf(out, outsz, "%s", base) >= outsz)
+        return -1;
+    return 0;
+}
+
+/* ---------------------------------------------------------------
  * run_benchmark_for_dir()   — RESULTS-MGMT-002
  *
  * Attach a benchmark to an EXISTING profiling run directory.
@@ -423,6 +693,9 @@ static int run_benchmark_for_dir(const char *run_dir)
     char        json_path[1100];
     char        bench_path[1100];
     char        program[512];
+    char        run_id[16]     = "";   /* PHASE-001: inherited or recovered */
+    char        timestamp[32]  = "";   /* PHASE-001: inherited or recovered */
+    int         reconstructed  = 0;    /* did we have to rebuild metadata?  */
     char        store[1024];
     char       *cmd_argv[128];
     int         cmd_argc;
@@ -458,6 +731,37 @@ static int run_benchmark_for_dir(const char *run_dir)
         return EXIT_FAILURE;
     }
 
+    /*
+     * PHASE-001: a benchmark BELONGS to its profiling run, so it must
+     * inherit the existing run_id and timestamp — never mint new ones.
+     *
+     * Decision 2 (legacy fallback): an old profile.json predating this
+     * phase has neither field. Rather than fail, we reconstruct:
+     *   - run_id missing    -> generate a fresh run_id
+     *   - timestamp missing -> recover it from the run directory name
+     * and warn the user that metadata was reconstructed. The old
+     * profile.json is NOT modified.
+     */
+    if (read_json_string_field(json_path, "run_id",
+                               run_id, sizeof(run_id)) != 0 || run_id[0] == '\0') {
+        make_run_id(run_id, sizeof(run_id));
+        reconstructed = 1;
+    }
+    if (read_json_string_field(json_path, "timestamp",
+                               timestamp, sizeof(timestamp)) != 0 || timestamp[0] == '\0') {
+        if (derive_timestamp_from_dir(run_dir, timestamp, sizeof(timestamp)) != 0)
+            timestamp[0] = '\0';   /* underivable -> omit the field */
+        reconstructed = 1;
+    }
+    if (reconstructed) {
+        fprintf(stderr,
+            "\n  Note: this looks like a legacy run (no Run ID metadata in "
+            "profile.json).\n"
+            "        Reconstructed run_id=%s timestamp=%s for benchmark.json.\n"
+            "        The existing profile.json was left unchanged.\n\n",
+            run_id, timestamp[0] ? timestamp : "(unavailable)");
+    }
+
     /* 4. Reconstruct the command arguments (quote-aware) */
     cmd_argc = parse_command_string(program, cmd_argv,
                                     (int)(sizeof(cmd_argv)/sizeof(cmd_argv[0])),
@@ -490,6 +794,7 @@ static int run_benchmark_for_dir(const char *run_dir)
     /* 6. Write benchmark.json into the same run directory */
     snprintf(bench_path, sizeof(bench_path), "%s/benchmark.json", run_dir);
     output_export_benchmark_json(program, bench_untraced, bench_traced,
+                                 run_id, timestamp[0] ? timestamp : NULL,
                                  bench_path);
 
     return EXIT_SUCCESS;
@@ -561,6 +866,7 @@ int main(int argc, char *argv[])
     const char *results_dir    = "results";  /* RESULTS-MGMT-001: base dir   */
     char        run_dir[1024]   = "";         /* <results>/<prog>/<timestamp> */
     char        timestamp[32]   = "";
+    char        run_id[16]      = "";          /* PHASE-001: run_<8 hex>       */
     char        auto_json[1100] = "";         /* run_dir/profile.json         */
     char        auto_csv[1100]  = "";         /* run_dir/results.csv          */
     syscall_stat_t *stats;
@@ -728,6 +1034,7 @@ int main(int argc, char *argv[])
          * read back its already-computed numbers via output parameters.
          */
         make_timestamp(timestamp, sizeof(timestamp));
+        make_run_id(run_id, sizeof(run_id));   /* PHASE-001: fresh run */
         {
             char desired[1024];
             if (build_run_dir(results_dir, argv[target_start], timestamp,
@@ -751,7 +1058,8 @@ int main(int argc, char *argv[])
                               "%s/benchmark.json", run_dir);
             if (n > 0 && (size_t)n < sizeof(bench_json)) {
                 output_export_benchmark_json(program_str, bench_untraced,
-                                             bench_traced, bench_json);
+                                             bench_traced, run_id, timestamp,
+                                             bench_json);
             }
         }
         return bench_rc;
@@ -801,6 +1109,7 @@ int main(int argc, char *argv[])
      * here automatically (see below).
      */
     make_timestamp(timestamp, sizeof(timestamp));
+    make_run_id(run_id, sizeof(run_id));   /* PHASE-001: one ID per run */
     {
         char desired[1024];
         if (build_run_dir(results_dir, argv[target_start], timestamp,
@@ -838,8 +1147,33 @@ int main(int argc, char *argv[])
     if (run_dir[0] != '\0') {
         snprintf(auto_json, sizeof(auto_json), "%s/profile.json", run_dir);
         snprintf(auto_csv,  sizeof(auto_csv),  "%s/results.csv",  run_dir);
-        output_export_json(stats, stats_count, total, program_str, auto_json);
+        output_export_json(stats, stats_count, total, program_str,
+                            run_id, timestamp, auto_json);
         output_export_csv(stats, stats_count, auto_csv);
+
+        /*
+         * PHASE-001: append this run to the registry catalog. We use
+         * the same count>0 filter as the JSON export (BUG-002) so the
+         * registry totals match profile.json exactly. The catalog key
+         * is the program basename (matching the results/<program>/...
+         * grouping); the full command stays in profile.json.
+         */
+        {
+            int      reg_unique = 0;
+            uint64_t reg_total  = 0;
+            int      k;
+            char     reg_prog[256];
+
+            for (k = 0; k < stats_count; k++) {
+                if (stats[k].call_count == 0) continue;
+                reg_total += stats[k].call_count;
+                reg_unique++;
+            }
+            basename_of(argv[target_start], reg_prog, sizeof(reg_prog));
+            registry_append(results_dir, run_id, reg_prog, timestamp,
+                            run_dir, (unsigned long long)reg_total,
+                            reg_unique);
+        }
     }
 
     /*
@@ -848,7 +1182,8 @@ int main(int argc, char *argv[])
      * automatic artifacts above.
      */
     if (do_json)
-        output_export_json(stats, stats_count, total, program_str, json_filename);
+        output_export_json(stats, stats_count, total, program_str,
+                           run_id, timestamp, json_filename);
 
     if (export_csv)
         output_export_csv(stats, stats_count, csv_filename);

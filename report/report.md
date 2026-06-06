@@ -39,6 +39,7 @@
 19. [Limitations](#19-limitations)
 20. [Future Work](#20-future-work)
 21. [Results Organization](#21-results-organization)
+22. [Run ID System (Server Edition – Phase 001)](#22-run-id-system-server-edition--phase-001)
 
 ---
 
@@ -1217,6 +1218,90 @@ profiler writes `profile.json` and `results.csv`, and the recommended workflow
 is to point `visualize.py --out` at the same run directory so the charts and
 `summary.txt` land beside them. This keeps the C tool free of any Python runtime
 dependency while still producing a complete artifact set per run.
+
+---
+
+## 22. Run ID System (Server Edition – Phase 001)
+
+This section documents the first piece of work on the **server edition** of the
+project. The university version was already complete and stable, and it worked
+perfectly well without any of what follows — so it is worth being clear about
+why we added this at all.
+
+### The starting point: runs without IDs
+
+In the version we submitted, a run was identified purely by where its files
+lived: `results/<program>/<timestamp>/`. That was enough for us. When we wanted
+to look at a run, we opened its folder; when we wanted to compare two runs, we
+opened two folders. Nothing in the profiling, tracing, or benchmarking logic
+needed a name for a run, and we did not give it one.
+
+We only started to feel the limitation when we began thinking ahead to the
+server edition — the WebUI, an API, and managing many runs over time. Those
+future features do not browse folders by hand the way we do; they need to refer
+to a specific run programmatically. A directory path like
+`results/find/2026-06-06_12-02-14/` is awkward for that: it is long, it mixes
+the program name and a timestamp together, and it is clumsy to put in a URL or
+pass through an API. We wanted a single, compact handle for each run instead.
+
+### Introducing Run IDs for future scalability
+
+So in Phase 001 we gave every profiling run a **Run ID** — the string `run_`
+followed by eight hexadecimal characters, for example `run_a8f3d21c`. It is
+generated automatically when a run's directory is created, and then written
+into that run's `profile.json` (and into `benchmark.json`). We were careful to
+add it *in front of* the existing fields and to change nothing else, so the
+files we already produce are byte-for-byte the same below the new metadata. The
+profiler still traces, profiles, and benchmarks exactly as before; the Run ID is
+just a label riding along.
+
+One design point we had to get right was the benchmark. A benchmark is not a
+separate thing from the run it measures — it belongs to that run. So when we
+attach a benchmark to an existing run with `--benchmark-run`, it does **not**
+mint a new Run ID; it reads the `run_id` and `timestamp` out of that run's
+`profile.json` and reuses them. We also did not want this to break on the older
+runs we had already generated (which have no Run ID yet), so for those we
+reconstruct the metadata — generating an ID and recovering the timestamp from
+the directory name — print a short note that we did so, and leave the old
+`profile.json` untouched.
+
+### A registry to simplify future server-side analysis
+
+The second half of Phase 001 is a small catalog file, `results/runs_index.json`,
+that lists every completed profiling run. Each run appends one short entry: its
+Run ID, the program, the timestamp, the path to its directory, and two summary
+counts (total and unique syscalls).
+
+The reason for this is something we anticipated for the server edition: a WebUI
+that wants to show a list of runs should not have to walk the entire results
+tree and open thousands of directories just to build that list. Reading one
+small index file is far cheaper and simpler. The registry is essentially a table
+of contents for the results folder.
+
+We were deliberate about what the registry is **not**. It is not a second copy
+of the profiling data — it stores only metadata and a `path` pointing back to
+the real run directory. The detailed syscall data still lives in exactly one
+place, inside `results/<program>/<timestamp>/`. Keeping a single source of truth
+avoids the classic problem of two copies drifting out of sync, and it keeps the
+index small and quick to read. The two counts we do duplicate are only there so
+a listing can show a run's size without opening it, and we compute them with the
+same completed-syscall rule the JSON export uses, so they always agree.
+
+We also decided that only complete profiling runs (the normal tracing commands)
+get a registry entry. A plain `--benchmark` run produces only a `benchmark.json`
+with no syscall data, so cataloguing it as a "run" would be misleading; we leave
+it out. To make the index robust we only ever append to it, and we write it
+atomically (to a temporary file that is then renamed into place) so that even an
+interrupted run cannot corrupt the catalog.
+
+### Why this was worth doing now
+
+None of this changes what the profiler measures or how. It is purely
+preparation. But getting the run identity and the catalog right early means the
+later server-edition work — the API, the WebUI, run management, and historical
+comparison — can build on a stable foundation instead of retrofitting IDs onto
+data that was never designed to have them. It was a small, low-risk change with
+a clear payoff for everything we plan to build next.
 
 ---
 
