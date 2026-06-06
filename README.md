@@ -23,6 +23,7 @@ It is **not** the final university report — that lives in `report/report.md`.
 5. [Architecture Overview](#5-architecture-overview)
 6. [Internal Components](#6-internal-components)
 7. [Build Instructions](#7-build-instructions)
+7a. [Server Setup & Quick Start (Virtual Environment)](#7a-server-setup--quick-start-virtual-environment)
 8. [Usage Examples](#8-usage-examples)
 9. [Filtering System](#9-filtering-system)
 10. [Benchmark Mode](#10-benchmark-mode)
@@ -262,27 +263,12 @@ and a deterministic behavioral summary.
   layout. It will not build or run on macOS, Windows, ARM, or other
   architectures.
 - **GCC** (any version supporting C99) and **make**.
-- For the visualizer: **Python 3** with **matplotlib** and **pandas**.
 
-Check your environment:
-
-```bash
-gcc --version
-make --version
-uname -m          # must print: x86_64
-```
-
-If the compiler or make is missing on a Debian/Ubuntu system:
-
-```bash
-sudo apt install build-essential
-```
-
-For the visualizer dependencies:
-
-```bash
-pip install matplotlib pandas
-```
+The visualizer (`visualize.py`) depends on **pandas** and **matplotlib**, listed
+in `requirements.txt`. The profiler itself remains a pure C application with no
+Python dependency — Python is only required for visualization. For the
+recommended virtual-environment install, see
+[Section 7a](#7a-server-setup--quick-start-virtual-environment).
 
 ### Building
 
@@ -301,6 +287,89 @@ make            # build ./profiler
 make clean      # remove compiled objects and the binary
 make test       # build and run the built-in smoke tests
 ```
+
+---
+
+## 7a. Server Setup & Quick Start (Virtual Environment)
+
+This section is the end-to-end path for deploying the project on a server: get
+the code, set up an isolated Python environment for the visualizer, and build
+the profiler. The actual day-to-day commands (tracing, benchmarking,
+visualizing) are documented in their own sections — this one only covers
+**setup** and then links to them, so each command is explained in exactly one
+place.
+
+> **Note on what needs Python.** Only the visualizer (`visualize.py`) needs
+> Python and the packages in `requirements.txt` (`matplotlib`, `pandas`). The C
+> profiler itself has **no** Python dependency — it is built with `make` and can
+> profile and benchmark on its own. The virtual environment below exists purely
+> to keep the visualizer's dependencies isolated from the system Python.
+
+### 1. Clone the repository
+
+```bash
+git clone <repository-url>
+cd syscall_profiler
+```
+
+### 2. Create and activate a virtual environment
+
+A virtual environment keeps `matplotlib` and `pandas` local to this project
+instead of installing them system-wide:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+This creates a `.venv/` directory in the project root and activates it; your
+shell prompt now shows `(.venv)`. To leave the environment later, run
+`deactivate`.
+
+### 3. Install the Python requirements
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+This installs the visualizer's dependencies (`matplotlib`, `pandas`) into the
+active environment.
+
+### 4. Build the profiler
+
+```bash
+make
+```
+
+This produces the `./profiler` executable. Prerequisites and the available
+make targets are in [Section 7](#7-build-instructions).
+
+### Quick start — the full workflow
+
+The complete sequence, from a fresh clone to a visualized run. Each command is
+explained in detail in the section linked beneath the block:
+
+```bash
+git clone <repository-url>
+cd syscall_profiler
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+make
+./profiler ls                                      # profile a program
+./profiler --benchmark-run results/ls/<timestamp>/ # benchmark that run
+python3 visualize.py results/ls/<timestamp>/       # charts + summary
+```
+
+Replace `<timestamp>` with the actual run directory name (printed as
+`Results:` when you profile). For what each command does and its full options,
+see [Usage Examples](#8-usage-examples), [Benchmark Mode](#10-benchmark-mode),
+[Results Management](#14a-results-management) (the `--benchmark-run` workflow),
+and [Visualization System](#13-visualization-system).
 
 ---
 
@@ -998,6 +1067,7 @@ syscall_profiler/
 │   └── args.h              legacy (not used by the build)
 │
 ├── visualize.py            Python chart + summary generator
+├── requirements.txt        Python dependencies for visualize.py
 ├── Makefile                build rules and the test target
 ├── README.md               this handbook
 └── report/
@@ -1077,6 +1147,11 @@ are a good candidate for removal in a future cleanup.)
 **`visualize.py`** — Standalone Python script (matplotlib + pandas). Reads a
 JSON export and writes the charts, the combined report image, and the
 deterministic `summary.txt`. Not part of the C build.
+
+**`requirements.txt`** — The Python dependencies for `visualize.py`
+(`matplotlib`, `pandas`). Used for the virtual-environment install in
+[Section 7a](#7a-server-setup--quick-start-virtual-environment). The C profiler
+does not use it.
 
 **`Makefile`** — Lists the eight compiled sources, builds `./profiler`, and
 provides `clean` and `test` targets.
@@ -1192,8 +1267,11 @@ Debian/Ubuntu, `sudo apt install build-essential`. Remember the tool is
 Linux x86-64 only; it will not build or run on macOS, Windows, or ARM.
 
 **`ModuleNotFoundError: No module named 'pandas'` (or `matplotlib`).** These are
-needed only by the visualizer, not by the C profiler. Install them with
-`pip install matplotlib pandas`. The profiler itself runs fine without Python.
+needed only by the visualizer, not by the C profiler. Install them with the
+virtual-environment workflow in
+[Section 7a](#7a-server-setup--quick-start-virtual-environment)
+(`pip install -r requirements.txt` inside an activated `.venv`). The profiler
+itself runs fine without Python.
 
 **`Error: profile.json not found in run directory: <path>`.** The visualizer was
 pointed at a directory that has no `profile.json` in it. Make sure you pass an
