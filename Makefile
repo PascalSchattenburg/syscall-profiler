@@ -32,7 +32,8 @@ SRCS    = src/main.c         \
           src/output.c       \
           src/decoder.c      \
           src/filter.c       \
-          src/benchmark.c
+          src/benchmark.c    \
+          src/run_artifacts.c
 
 # ---- Object files (same names, in a build/ dir) ----
 OBJS    = $(SRCS:.c=.o)

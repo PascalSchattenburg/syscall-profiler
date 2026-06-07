@@ -33,6 +33,7 @@ It is **not** the final university report — that lives in `report/report.md`.
 14. [Behavioral Summary Generation](#14-behavioral-summary-generation)
 14a. [Results Management](#14a-results-management)
 14b. [Phase 001 – Run ID System](#14b-phase-001--run-id-system)
+14c. [Phase 002 – Dynamic Artifact Detection](#14c-phase-002--dynamic-artifact-detection)
 15. [Project Structure](#15-project-structure)
 16. [Source File Overview](#16-source-file-overview)
 17. [Design Decisions](#17-design-decisions)
@@ -1040,6 +1041,112 @@ The catalog is the foundation for the server edition's future features:
 
 ---
 
+## 14c. Phase 002 – Dynamic Artifact Detection
+
+> Like Phase 001, this is **server-edition** infrastructure for a future
+> WebUI/API. It adds one small, read-only helper module and changes nothing
+> else: tracing, profiling, benchmarking, the JSON/CSV export formats, the
+> visualization step, and the `runs_index.json` format are all untouched, and
+> no user-facing command is added. The module compiles into the project and is
+> available for future callers, but is not yet exposed to users.
+
+Phase 002 answers a question the registry deliberately does **not**: for a given
+run, which artifacts exist *right now* — `profile.json`, `benchmark.json`, and
+the visualization?
+
+### Registry metadata stays immutable; artifact state is derived
+
+The Phase 001 registry (`runs_index.json`) stores only facts that are fixed when
+a run is created — `run_id`, `program`, `timestamp`, `path`, and the syscall
+counts. Those never change, so the registry never needs updating and can never
+go stale.
+
+Artifact presence is different: it **changes over the life of a run**. A run may
+start with only `profile.json`, gain `benchmark.json` hours later from
+`./profiler --benchmark-run <dir>`, and gain `syscall_report.png` later still
+when the visualizer runs. If the registry stored flags like `has_benchmark`,
+every one of those later actions would have to remember to rewrite the registry,
+and any path that forgot would leave it lying about what is on disk.
+
+Phase 002 avoids that whole class of bug by **never storing artifact state**. It
+is computed from the filesystem at the moment it is asked for. The filesystem is
+the single source of truth for "what exists now"; there is no second copy to
+drift, so **stale artifact metadata is impossible**.
+
+### What is detected
+
+The module inspects a run directory directly (using `stat()` only — no JSON
+parsing, no registry lookups, no caching) and reports three booleans:
+
+| Field | True when… |
+|---|---|
+| `has_profile` | `profile.json` exists |
+| `has_benchmark` | `benchmark.json` exists |
+| `has_visualization` | `syscall_report.png` exists |
+
+`syscall_report.png` is the single canonical visualization artifact — the
+combined report produced by a completed visualization run — so it is the marker
+for `has_visualization`.
+
+> **Caveat.** A run generated with the visualizer's `--no-combined` option
+> produces the individual charts but **not** `syscall_report.png`, and will
+> therefore report `has_visualization = false` even though chart PNGs exist.
+> This is intentional for Phase 002: detection keys on the one canonical
+> combined report, not on the presence of arbitrary PNG files.
+
+### API
+
+The helper lives in `src/run_artifacts.c` / `include/run_artifacts.h`:
+
+```c
+typedef struct {
+    int has_profile;
+    int has_benchmark;
+    int has_visualization;
+} RunArtifacts;
+
+/* Detect all three in a single filesystem pass. */
+RunArtifacts run_detect_artifacts(const char *run_dir);
+
+/* Convenience single-artifact queries (delegate to the above). */
+int run_has_profile(const char *run_dir);
+int run_has_benchmark(const char *run_dir);
+int run_has_visualization(const char *run_dir);
+```
+
+`run_detect_artifacts()` is preferred when more than one state is needed, since
+it resolves a run in one pass instead of three. A `NULL`, empty, or non-existent
+`run_dir` simply reports all-false (a missing run has no artifacts); a trailing
+slash on the path is tolerated.
+
+### Example
+
+```c
+#include "run_artifacts.h"
+
+RunArtifacts a =
+    run_detect_artifacts("results/ls/2026-06-06_11-24-36");
+
+printf("%d %d %d\n",
+       a.has_profile,
+       a.has_benchmark,
+       a.has_visualization);
+/* e.g. "1 0 1" — profiled and visualized, but not yet benchmarked */
+```
+
+### How this prepares the system for a future WebUI/API
+
+A future WebUI or API lists runs cheaply from `runs_index.json` (no directory
+scan), and then — only for a run it is actually displaying — calls
+`run_detect_artifacts()` to learn which artifacts are available right now. That
+drives the interface: enable or grey out a "View charts" button, decide whether
+to still offer a "Run benchmark" action, show per-run status badges, and so on.
+Because the answer is always recomputed from disk, it stays correct even if
+artifacts are added or removed between requests — no cache to invalidate, no
+registry to keep in sync.
+
+---
+
 ## 15. Project Structure
 
 ```
@@ -1054,6 +1161,7 @@ syscall_profiler/
 │   ├── output.c            trace lines, report, CSV and JSON export
 │   ├── filter.c            --only / --exclude / --top logic
 │   ├── benchmark.c         --benchmark overhead measurement
+│   ├── run_artifacts.c     dynamic artifact detection (Phase 002)
 │   └── args.c              legacy decoder (not compiled; see note below)
 │
 ├── include/                matching header files
@@ -1064,6 +1172,7 @@ syscall_profiler/
 │   ├── output.h
 │   ├── filter.h
 │   ├── benchmark.h
+│   ├── run_artifacts.h     dynamic artifact detection (Phase 002)
 │   └── args.h              legacy (not used by the build)
 │
 ├── visualize.py            Python chart + summary generator
