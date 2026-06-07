@@ -8,21 +8,33 @@ int main(void)
 
     printf("runs = %zu\n", registry.count);
 
-    RunInfo *ls_run =
-        registry_find_by_program(&registry, "ls");
+    RunInfo *run =
+        registry_find_by_id(
+            &registry,
+            "run_e15969ab");
 
-    if (ls_run != NULL)
+    if (run != NULL)
     {
-        printf("run_id    = %s\n", ls_run->run_id);
-        printf("program   = %s\n", ls_run->program);
-        printf("timestamp = %s\n", ls_run->timestamp);
+        printf("run_id    = %s\n", run->run_id);
+        printf("program   = %s\n", run->program);
+        printf("timestamp = %s\n", run->timestamp);
+        printf("path      = %s\n", run->path);
 
-        RunArtifacts a =
-            registry_get_artifacts(ls_run);
+        RunArtifacts artifacts =
+            registry_get_artifacts(run);
 
-        printf("profile   = %d\n", a.has_profile);
-        printf("benchmark = %d\n", a.has_benchmark);
-        printf("visual    = %d\n", a.has_visualization);
+        printf("profile   = %d\n",
+               artifacts.has_profile);
+
+        printf("benchmark = %d\n",
+               artifacts.has_benchmark);
+
+        printf("visual    = %d\n",
+               artifacts.has_visualization);
+    }
+    else
+    {
+        printf("Run not found.\n");
     }
 
     registry_free(&registry);
