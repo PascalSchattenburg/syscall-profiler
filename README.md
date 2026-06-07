@@ -34,6 +34,7 @@ It is **not** the final university report — that lives in `report/report.md`.
 14a. [Results Management](#14a-results-management)
 14b. [Phase 001 – Run ID System](#14b-phase-001--run-id-system)
 14c. [Phase 002 – Dynamic Artifact Detection](#14c-phase-002--dynamic-artifact-detection)
+14d. [Phase 003 – Run Registry Access Layer](#14d-phase-003--run-registry-access-layer)
 15. [Project Structure](#15-project-structure)
 16. [Source File Overview](#16-source-file-overview)
 17. [Design Decisions](#17-design-decisions)
@@ -1147,6 +1148,118 @@ registry to keep in sync.
 
 ---
 
+## 14d. Phase 003 – Run Registry Access Layer
+
+> Like Phases 001 and 002, this is **server-edition** infrastructure for a
+> future WebUI/API. It is purely additive and internal: no CLI flag, no server,
+> no HTTP, no database. It changes nothing about tracing, profiling,
+> benchmarking, the JSON/CSV export formats, Run ID generation, the registry
+> *writer*, or artifact detection — it only adds a module that **reads**
+> `runs_index.json`.
+
+### Why this layer exists
+
+Phase 001 created `runs_index.json` as a catalog of completed runs, and that
+file is the right place to look up runs without scanning the whole results tree
+(see [Phase 001](#14b-phase-001--run-id-system)). But until now nothing in the
+codebase actually *loads* it — any future component (a CLI tool, an API, a
+WebUI) would have to open the file, re-implement the same JSON parsing, and
+hard-code the same filesystem layout. That is duplicated, fragile, and easy to
+get subtly wrong in each consumer.
+
+Phase 003 adds a single module — `src/run_registry.c` / `include/run_registry.h`
+— that becomes the **one owner of registry access**. Future code asks it for
+runs through plain C functions and never touches JSON or paths directly. If the
+on-disk format ever changes, only this module changes; every consumer keeps
+working unchanged.
+
+### What it provides
+
+```c
+typedef struct {
+    char run_id[32];
+    char program[256];
+    char timestamp[64];
+    char path[512];
+    long total_syscalls;
+    long unique_syscalls;
+} RunInfo;
+
+typedef struct {
+    RunInfo *runs;
+    size_t   count;
+} RunRegistry;
+
+RunRegistry  registry_load(const char *results_dir);
+RunInfo     *registry_find_by_id(RunRegistry *registry, const char *run_id);
+RunInfo     *registry_find_by_program(RunRegistry *registry, const char *program);
+void         registry_free(RunRegistry *registry);
+RunArtifacts registry_get_artifacts(const RunInfo *run);   /* Phase 002 bridge */
+```
+
+`RunInfo` mirrors exactly the fields stored per entry in `runs_index.json` — it
+is **metadata only** and deliberately does not load `profile.json` or duplicate
+any syscall data. `registry_load("results")` reads `results/runs_index.json`
+and loads only what the registry already stores; it does **not** scan run
+directories (avoiding that scan is the entire reason the registry exists).
+
+Lookups are exact-match and return a **borrowed** pointer into the registry's
+array (valid until `registry_free`, never freed by the caller). A missing,
+empty, or entry-less registry loads quietly as `{ runs = NULL, count = 0 }`,
+which is the normal state of a fresh install with no runs yet.
+
+### Memory ownership
+
+`registry_load()` returns a `RunRegistry` that owns its `runs` array; the caller
+must release it with `registry_free()`, which is the only function that frees
+registry memory. The pointers returned by `registry_find_by_id()` and
+`registry_find_by_program()` point *into* that array — they are borrowed, must
+not be freed, and must not be used after `registry_free()`. Because `RunInfo`
+holds only fixed-size buffers (no nested pointers), `registry_free()` releases a
+single block and there is nothing else to clean up.
+
+### How it integrates with Phase 002
+
+The registry stays metadata-only; mutable artifact state is still never stored
+in it. `registry_get_artifacts(run)` is the bridge between the two phases: given
+a run's Phase 001 metadata, it calls `run_detect_artifacts(run->path)`
+(Phase 002) and returns the live `RunArtifacts`. So a caller gets stable
+catalog metadata from the registry and up-to-the-moment artifact state from the
+filesystem, with no duplicated or stale flags.
+
+### How this prepares the project for CLI tools, APIs, and a WebUI
+
+Any of those future front-ends now shares one access path: load the registry
+once, list or look up runs as `RunInfo`, and ask `registry_get_artifacts()`
+what each run currently has on disk. A CLI `list` command, an API
+`GET /runs/<id>`, or a WebUI run table all become thin layers over this module
+instead of re-parsing JSON. None of them exists yet — Phase 003 only builds the
+missing layer between `runs_index.json` and that future development.
+
+### Example
+
+```c
+#include "run_registry.h"
+
+RunRegistry registry =
+    registry_load("results");
+
+RunInfo *run =
+    registry_find_by_id(
+        &registry,
+        "run_a8f3d21c"
+    );
+
+RunArtifacts artifacts =
+    registry_get_artifacts(run);
+
+/* ... use run metadata + live artifact state ... */
+
+registry_free(&registry);   /* releases the runs array */
+```
+
+---
+
 ## 15. Project Structure
 
 ```
@@ -1162,6 +1275,7 @@ syscall_profiler/
 │   ├── filter.c            --only / --exclude / --top logic
 │   ├── benchmark.c         --benchmark overhead measurement
 │   ├── run_artifacts.c     dynamic artifact detection (Phase 002)
+│   ├── run_registry.c      run registry access layer (Phase 003)
 │   └── args.c              legacy decoder (not compiled; see note below)
 │
 ├── include/                matching header files
@@ -1173,6 +1287,7 @@ syscall_profiler/
 │   ├── filter.h
 │   ├── benchmark.h
 │   ├── run_artifacts.h     dynamic artifact detection (Phase 002)
+│   ├── run_registry.h      run registry access layer (Phase 003)
 │   └── args.h              legacy (not used by the build)
 │
 ├── visualize.py            Python chart + summary generator
