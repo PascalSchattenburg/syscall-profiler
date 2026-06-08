@@ -1,519 +1,444 @@
-# System Call Profiler & Tracer
-## Final Project Report
+# Project Report — Syscall Profiler
 
-**Course:** Operating Systems  
-**Project:** System Call Profiler and Tracer  
-**Platform:** Linux x86-64, Ubuntu Server  
-**Main technologies:** C, `ptrace()`, Python, Flask, pandas, matplotlib  
+*Operating Systems course project*
 
----
-
-## 1. Introduction
-
-For our Operating Systems project, we built a system call profiler and tracer for Linux. The original idea was simple: we wanted to run a normal program, observe which system calls it makes, count them, measure them and understand how the program interacts with the operating system.
-
-During the project, this idea grew much larger than we initially expected. We started with a command-line tracer, but over time we added persistent run storage, benchmarking, visualizations, automated summaries, a run registry and finally a Web UI dashboard. By the end, the project was no longer only a syscall tracer. It became a small observability platform for understanding program behavior on a Linux server.
-
-The final system can:
-
-- trace a program with `ptrace()`
-- decode and categorize system calls
-- count and time system calls
-- export profile data to JSON and CSV
-- benchmark tracing overhead
-- store every run in a structured directory
-- assign every run a stable run ID
-- generate charts and a deterministic behavior summary
-- display runs, benchmarks, summaries and charts in a browser-based Web UI
-
-We built the project as three Computer Science students. A large part of the project was not only implementing features, but also learning how to turn low-level operating system data into something that is understandable and useful.
+This report is the story of how we built our system call profiler. It is written as a
+development diary rather than a formal paper, because that is honestly how the project
+felt: we started with a small idea, kept running into things we did not expect, and ended
+up somewhere much larger than we planned. We have tried to be honest about what we got
+right, what surprised us, and what we still do not fully understand.
 
 ---
 
-## 2. Background
+## How the project started
 
-System calls are the interface between user programs and the operating system kernel. A program cannot directly access files, devices, network sockets or process management functions. Instead, it asks the kernel to perform these operations through system calls.
+We began with a simple goal. We wanted to write a program that could watch another program
+and tell us which system calls it made. The plan was modest: trace a process on a normal
+Ubuntu machine, count the system calls, time them, and print a table at the end. That was
+it. A command-line tool for a single laptop.
 
-Examples include:
+We got that working fairly quickly. We could run `./profiler ls` and see every `openat`,
+`read`, `mmap`, and `close` that `ls` performed, with counts and timings. It was satisfying
+the first time we saw it, because suddenly a program we ran every day became transparent —
+we could see exactly what it asked the kernel to do.
 
-- `openat()` to open files
-- `read()` and `write()` for I/O
-- `mmap()` for memory mapping
-- `fork()`, `clone()` and `execve()` for process and thread behavior
-- `close()` to release file descriptors
+But almost immediately we realized two things. First, the raw output was hard to read.
+Second, a single laptop running the tool occasionally was not a very interesting way to
+use it. Both of those realizations pushed the project in directions we had not originally
+planned, and most of this report is about those directions.
 
-In the Operating Systems lecture, system calls are introduced as the lower-level interface to OS services. This project made that concept visible. Instead of only learning that applications use system calls, we could actually watch a program crossing the user-kernel boundary again and again.
+---
 
-A simple command such as:
+## Why we chose ptrace()
 
-```bash
-ls
+Before writing any tracing code we had to decide *how* to observe system calls. We looked
+at several options and discussed the trade-offs as a team.
+
+**eBPF.** This was the most powerful option. eBPF can hook into the kernel with very low
+overhead and is what serious, production-grade observability tools use today. We were
+genuinely tempted. But the more we read, the more we realized eBPF would have pulled the
+project in a direction we did not want for a course project: writing and loading kernel
+programs, dealing with the verifier, managing toolchains, and debugging in kernel space.
+We decided that eBPF would almost certainly give us lower overhead and far better
+scalability, but at the cost of a steep increase in complexity that would have left us less
+time to actually understand system calls themselves.
+
+**auditd.** The Linux audit subsystem can log system calls too. But it is more of a
+security-auditing facility than a profiling tool. It would have given us logs to parse
+rather than a live, programmatic view of a process, and configuring it felt like working
+*around* a system rather than learning how tracing actually works.
+
+**Kernel modules.** We briefly considered writing our own kernel module. We quickly talked
+ourselves out of it. A bug in user space crashes our program; a bug in a kernel module can
+take down the whole machine. For a learning project that was the wrong place to spend our
+risk budget.
+
+**ptrace().** In the end we chose `ptrace()`, and we are happy with that choice. The
+reasons that mattered to us were:
+
+- It is available on any standard Linux system, with no custom kernel modules and no
+  special configuration.
+- It gives direct, immediate visibility into every system call a process makes — exactly
+  the thing we wanted to study.
+- Its complexity is right for an Operating Systems course: hard enough to teach us a lot,
+  but contained entirely in user space.
+- It was far easier to develop and debug. We could set breakpoints, print things, and
+  iterate quickly, because everything ran as an ordinary program.
+- The educational value was high. Using `ptrace` forced us to actually understand
+  process control, signals, `wait()` semantics, and how a tracer and tracee interact.
+
+We want to be clear that this was a deliberate trade-off and not us pretending `ptrace` is
+the best tool for every job. For a real high-traffic server we would reach for eBPF. For
+*learning how system call tracing works*, `ptrace` was the right choice, and we would make
+the same decision again.
+
+---
+
+## Learning ptrace the hard way
+
+Getting the first trace working taught us more than we expected. We learned that the child
+calls `PTRACE_TRACEME` and then `execve`, that the parent waits for it to stop, and that
+the tracee stops twice per system call — once on entry and once on exit. We learned to use
+`PTRACE_O_TRACESYSGOOD` so we could tell a syscall-stop apart from an ordinary signal.
+
+The part that genuinely caught us out was following children and threads. Our early
+version only traced the top-level process, which was fine for `ls` but wrong for anything
+that forked or spawned threads. We discovered that we needed `PTRACE_O_TRACEFORK`,
+`PTRACE_O_TRACEVFORK`, and `PTRACE_O_TRACECLONE` so the kernel would automatically attach
+to new children and threads, and that we then had to track every traced process in a small
+table and wait on *any* of them. We also added `PTRACE_O_EXITKILL` so that if our profiler
+died, it would not leave orphaned, stopped processes behind — a lesson we learned after
+leaving a few stuck processes on the machine.
+
+We timed each system call with `CLOCK_MONOTONIC`, because it does not jump around when the
+system clock is adjusted. None of this was conceptually huge, but every piece had to be
+exactly right, and the debugging taught us how subtle process control really is.
+
+---
+
+## Why we moved to a server edition
+
+Early in development we made a decision that changed the whole shape of the project: we
+moved it onto a dedicated Ubuntu server instead of running it on a laptop now and then.
+
+We did not do this just because it sounded more interesting. We did it because we realized
+a dedicated server would let us explore the kind of scenarios that observability tools
+actually exist for. On a laptop, a profiling run is a one-off: you run it, you read the
+output, you close the terminal, and the data is gone. On a server, things look different:
+
+- The tool can be **permanently available**, ready whenever we want to profile something.
+- Runs can be **stored centrally** in one place instead of scattered across machines.
+- We can **collect and compare many runs over time** rather than looking at one in
+  isolation.
+- We can serve a **Web UI dashboard** that we reach **remotely** from any browser.
+- The whole workflow starts to resemble a **real monitoring system** rather than a
+  classroom exercise.
+
+That decision expanded the scope dramatically. Once runs lived on a server and accumulated
+over time, we needed a way to keep track of them — which led to the run registry. Once we
+had many runs, we wanted to measure and compare their cost — which led to the benchmarking
+system. Once we were storing all this data, we wanted to actually understand it — which led
+to the visualization pipeline and, finally, the Web UI. The server decision is the single
+choice that turned a tracing tool into an observability platform.
+
+---
+
+## Why visualization became necessary
+
+At first the profiler only produced JSON. Technically that was complete — every number we
+could possibly want was in there. But we quickly discovered an uncomfortable truth: raw
+syscall data is genuinely hard to interpret.
+
+A long list of syscall names with counts and timings does not actually tell you what a
+program is *doing*. We would stare at a table with `openat: 7`, `mmap: 17`, `read: 7`,
+`getdents64: 2` and have to reconstruct in our heads that "this program opened some files,
+loaded its shared libraries, read some data, and listed a directory." We were doing
+interpretation work by hand, every time, and we realized that anyone using the tool would
+have to do the same.
+
+So we started adding layers whose only purpose was to make the data understandable:
+
+- A **visualization pipeline** that draws the data as charts, so distribution and
+  proportion are visible at a glance instead of being computed mentally.
+- **Automated behavior summaries** that describe a run in plain English.
+- **Benchmark visualizations** so overhead is something you can see, not just a number.
+- A **Web UI dashboard** that brings runs, profiles, benchmarks, summaries, and charts
+  together in one place.
+
+Each of these steps took low-level trace data and moved it one step closer to something a
+human can read quickly. In hindsight this was the real heart of the project, even though it
+was not part of our original plan at all.
+
+---
+
+## How the automated behavior summaries work (and why they are not AI)
+
+We want to explain this part carefully, because it is easy to assume that a tool which
+writes English sentences about a program must be using an AI model. **It is not.** Our
+summaries are generated **deterministically** by the visualization pipeline using
+rule-based logic. The same `profile.json` always produces exactly the same summary text.
+There is no AI model, no language model, no network API, and no randomness involved.
+
+Conceptually, here is what happens when we generate a summary:
+
+1. **`visualize.py` loads `profile.json`** for the run and reads the per-syscall table
+   into a data frame.
+
+2. **Syscalls are grouped into categories** using the same behavioral categories the
+   profiler assigns — File System, Memory, Network, Process Management, Signal, IPC, Time,
+   and Other.
+
+3. **The pipeline counts things** it knows how to talk about:
+   - the total number of system calls and the number of distinct types;
+   - how many calls fall into each category;
+   - the dominant category and its share of all calls;
+   - specific, easy-to-explain syscalls — `open`/`openat`, `read`, `write`,
+     `getdents`/`getdents64` (directory scanning);
+   - memory-mapping activity (`mmap`);
+   - how many low-frequency syscall types were grouped into the "other" bucket, and what
+     share of all calls that represents.
+
+4. **Rule-based heuristics decide what to say.** For example:
+   - if the dominant category is File System, the summary says the activity was mostly
+     file-system related, with its percentage;
+   - if there are several `open`/`read`/`write`/directory-scan calls, it states them
+     explicitly ("opened files 7 times, read data 7 times, ...");
+   - if there are at least a few `mmap` calls, it notes that memory-mapping activity was
+     mostly caused by loading shared libraries at startup;
+   - it explains the "other" group so the reader knows those calls were folded together
+     only to keep the charts readable.
+
+5. **Predefined templates are filled** with the collected statistics. The English
+   sentences are fixed templates with the real numbers substituted in — for instance,
+   *"The program opened files X times and read data Y times."*
+
+6. **The result is written to `summary.txt`** in the run directory.
+
+A real example, produced for `ls`, looks like this:
+
+```
+Program traced: ls
+
+Most activity was file-system related (57%).
+The program opened files 7 times, read data 7 times, wrote data 1 time, and scanned directories 2 times.
+Memory mapping activity (17 mmap calls) was mostly caused by loading shared libraries at startup.
+The remaining 5 syscall types were grouped into 'other' and accounted for 6.8% of all observed system calls. These are lower-frequency operations grouped together to keep the visualization readable.
+
+In total: 74 syscalls across 20 distinct types.
 ```
 
-already produces many system calls. Some of them are caused by `ls` itself, but many happen before the actual program logic starts, for example while shared libraries are loaded through the dynamic linker. Seeing this directly was one of the first moments where the project became meaningful for us.
+We deliberately chose this rule-based approach over anything fancier because it gives us:
+
+- **reproducible summaries** — the same input always gives the same text;
+- **deterministic output** — nothing depends on sampling or external state;
+- **no external dependency** — no AI service, no network, nothing to break or pay for;
+- **transparent logic** — every sentence can be traced back to a specific rule we wrote.
+
+One thing we are quietly proud of: we also made sure the numbers in the summary match the
+charts exactly. Early on, the "other" count in the summary disagreed with the distribution
+chart because they were computed in two different places. We fixed this by centralizing
+that calculation so the summary, the distribution chart, and the combined report all use
+the same shared computation. It was a small bug, but it taught us that consistency between
+different views of the same data has to be engineered on purpose.
+
+The whole point of these summaries is that a user should be able to understand what a
+program did without ever reading the raw syscall table themselves.
 
 ---
 
-## 3. Project History: From Local Tracer to Server Edition
+## Benchmarking, and a result we still cannot fully explain
 
-At the beginning, our plan was to build a simple local syscall profiler. The first goal was to run the tool on a normal Ubuntu machine and print a live trace and a final report.
+We wanted to know how much our tracing actually cost, so we built a benchmarking mode. It
+times the target program in two ways: untraced (a plain fork/exec/wait) and traced (a
+stripped-down `ptrace(PTRACE_SYSCALL)` loop with no decoding or output, to isolate pure
+tracing cost). To reduce noise we run each mode three times and keep the **minimum** of
+each, on the theory that the minimum is the cleanest, least-contended measurement.
 
-Very early in development, we realized that this was useful, but also limited. A one-time terminal output is interesting for understanding one command, but it is not ideal for collecting many runs, comparing behavior over time or presenting the project in a clear way.
+For most programs the results matched our intuition: tracing adds overhead, sometimes a
+lot of it, because the tracee stops twice per system call and the kernel has to context
+switch to our profiler each time.
 
-Because we had access to a dedicated Ubuntu server, we decided to move the project toward a server edition. This was not just because it was "cooler". We realized that a server deployment gave the project a more realistic monitoring scenario:
+But then we hit something strange. In a small number of runs, the *traced* execution came
+out **faster** than the untraced one. One run we kept around looked like this:
 
-- the server can run permanently
-- many profiling runs can be collected over time
-- results can be stored centrally
-- a browser dashboard can make the data easier to access
-- the workflow becomes closer to real observability and monitoring tools
-
-This decision significantly expanded the scope. We had to think about persistent storage, run organization, metadata, benchmark artifacts, visualization artifacts and how a Web UI should read the generated data. Looking back, this was the point where the project changed from a small tracer into a platform.
-
----
-
-## 4. Why We Chose ptrace()
-
-We chose `ptrace()` as the tracing mechanism because it is the standard Linux interface for observing and controlling another process. Tools such as `strace` and debuggers such as GDB are based on the same idea.
-
-We considered other approaches conceptually, especially eBPF, auditd and kernel modules.
-
-### Why not eBPF?
-
-eBPF would probably be the better choice for a production-grade tracing backend. It can collect data with much lower overhead and can aggregate information inside the kernel. However, it would also have introduced much more complexity: eBPF programs, verifier restrictions, kernel-side data structures and a separate development workflow.
-
-For an Operating Systems course project, we wanted to understand process tracing, syscall entry and exit, register usage and context switching directly. `ptrace()` forced us to learn exactly those concepts.
-
-### Why not auditd?
-
-`auditd` is useful for security auditing and system-wide logging, but it is less suitable for building our own educational profiler. It would not give us the same direct control over syscall entry and exit handling, argument decoding and timing.
-
-### Why not kernel modules?
-
-A kernel module would have been powerful, but also risky and too complex for the project scope. Writing kernel code would require more care, more debugging effort and higher risk of system instability. We wanted a user-space tool that could be built, tested and demonstrated safely.
-
-### Why ptrace was appropriate
-
-`ptrace()` was the best fit because:
-
-- it is available on standard Linux systems
-- it requires no custom kernel module
-- it gives direct access to syscall entry and exit events
-- it allows reading registers and tracee memory
-- it is educational and closely connected to OS concepts
-- it keeps the implementation complexity realistic
-- it is easier to debug than kernel-space code
-
-The main disadvantage is overhead. Every syscall causes the traced program to stop twice: once at entry and once at exit. This creates additional context switches. We accepted this limitation and added benchmark mode to measure it instead of hiding it.
-
----
-
-## 5. System Architecture
-
-The final system is built as a pipeline:
-
-```text
-Profiler (C)
-    |
-    v
-Run Directory + Registry
-    |
-    v
-Benchmarking
-    |
-    v
-Visualization
-    |
-    v
-Web UI
 ```
-
-### Profiler
-
-The profiler is written in C. It launches the target program, traces it with `ptrace()`, decodes syscalls and records statistics.
-
-### Results directory
-
-Every profiling run is written into:
-
-```text
-results/<program>/<timestamp>/
-```
-
-The directory contains the artifacts belonging to that run.
-
-### Run registry
-
-The registry file:
-
-```text
-results/runs_index.json
-```
-
-stores metadata for completed runs. This gives every run a stable entry that the Web UI can read without scanning all directories manually.
-
-### Benchmarking
-
-Benchmarking compares normal execution with traced execution. With `--benchmark-run`, benchmark data is written into the same run directory as the profile.
-
-### Visualization
-
-The visualization script reads `profile.json`, produces charts and writes a deterministic `summary.txt`.
-
-### Web UI
-
-The Flask Web UI reads the registry and the run artifacts. It does not modify data. It is a read-only dashboard for exploring collected runs.
-
----
-
-## 6. Implementation
-
-### Tracing
-
-The tracer uses the typical `ptrace()` model:
-
-1. The profiler forks.
-2. The child process calls `PTRACE_TRACEME`.
-3. The child executes the target program.
-4. The parent waits for syscall stops.
-5. The tracer alternates between syscall entry and syscall exit.
-6. On entry, arguments are decoded.
-7. On exit, return values and durations are recorded.
-
-The hardest part was understanding that every syscall appears twice. At first, it is tempting to think that a syscall is just one event. In reality, with `ptrace()`, we receive an entry stop and an exit stop. We had to build a small state machine to know whether the current stop belongs to the beginning or the end of a syscall.
-
-### Profiling
-
-The profiler aggregates:
-
-- syscall count
-- total time
-- average time
-- percentage of total calls
-- category totals
-
-The final report shows which syscalls occurred most often and which were slowest on average.
-
-### Syscall categories
-
-We grouped syscalls into categories such as:
-
-- File System
-- Memory
-- Process
-- IPC
-- System
-- Network
-- Signal
-- Time
-
-This helped us interpret program behavior at a higher level. A raw list of syscall names is correct, but a category summary is much easier to understand.
-
-### Exports
-
-The project exports both CSV and JSON.
-
-CSV is useful for spreadsheets and quick inspection. JSON became the most important format because the visualization pipeline and Web UI use it as structured input.
-
-### Run storage
-
-One important improvement was the results hierarchy. Instead of overwriting files, every run gets its own directory:
-
-```text
-results/ls/2026-06-08_16-27-57/
-```
-
-This directory can contain:
-
-```text
-profile.json
-results.csv
-benchmark.json
-summary.txt
-syscall_counts.png
-syscall_distribution.png
-category_breakdown.png
-slowest_syscalls.png
-syscall_report.png
-```
-
-This structure made the later Web UI much easier to build.
-
----
-
-## 7. Why Visualization Became Necessary
-
-At first, the profiler only produced terminal output and JSON files. Technically, that was enough. The data was correct and complete. But we quickly discovered that raw syscall data is difficult to interpret.
-
-A large list of syscall counts and timings does not immediately tell a user what the program did. Even we, as the developers, often had to stare at the JSON and ask: what does this actually mean?
-
-That is why we added the visualization pipeline. The charts made patterns much easier to see:
-
-- Which syscall was most frequent?
-- Which category dominated?
-- How much of the run was file-system behavior?
-- Which syscalls were slowest?
-- How large is the long tail of less frequent syscalls?
-
-Later, the visualization step also produced `summary.txt`, and the Web UI displayed the generated charts and summaries. This made the project much more usable. We learned that observability is not only about collecting data. It is also about presenting data in a form that humans can understand quickly.
-
----
-
-## 8. Automated Behavior Summary
-
-One important part of the project is the automated behavior summary.
-
-The summaries are not generated by AI. They are generated deterministically by our visualization pipeline.
-
-The process works conceptually like this:
-
-1. `visualize.py` loads `profile.json`.
-2. It reads all syscall entries and their counts.
-3. It groups syscalls into categories such as File System, Memory, Process, IPC and System.
-4. It calculates:
-   - total syscall count
-   - unique syscall count
-   - category frequencies
-   - dominant category
-   - dominant syscall types
-   - file operations such as open, read, write and directory scans
-   - memory mapping activity such as `mmap`
-   - process-related activity
-5. Rule-based heuristics decide what behavior is most important.
-6. Predefined text templates are filled with the measured numbers.
-7. The generated text is written to `summary.txt`.
-
-For example, if a program has many `openat`, `read`, `write` and `getdents64` calls, the summary describes it as file-system oriented. If it has many `mmap` calls, the summary explains memory mapping activity, often related to shared library loading.
-
-A typical generated sentence is:
-
-```text
-The program opened files 3 times, read data 1 time, and wrote data 1 time.
-```
-
-This approach has several advantages:
-
-- it is reproducible
-- it is deterministic
-- it requires no external AI service
-- it can be explained from the code
-- it works offline
-- the same input always produces the same summary
-
-We added this because we wanted users to get a quick interpretation without reading raw syscall tables themselves.
-
----
-
-## 9. Benchmarking and Observations
-
-Benchmarking was added because `ptrace()` overhead is a real limitation. A traced program should normally run slower than an untraced program because every syscall causes additional stops and context switches.
-
-The benchmark system compares:
-
-- normal execution
-- traced execution
-
-and reports an overhead multiplier.
-
-In most cases, the results made sense: tracing was slower. However, we also discovered an interesting anomaly in a small number of short runs. Sometimes the traced execution appeared faster than the untraced execution.
-
-Example:
-
-```text
-normal = 2.804 ms
-traced = 1.010 ms
+normal   = 2.804 ms
+traced   = 1.010 ms
 overhead = 0.36x
 ```
 
-Clearly, tracing does not actually make a program faster. We interpret this as a benchmark artifact. Possible explanations are:
+That is obviously not real. Tracing cannot make a program genuinely faster — it can only
+add work. We saw the same kind of thing in our own final test runs, where an untraced `ls`
+measured around 2.07 ms and the traced run measured around 1.76 ms, giving an "overhead"
+below 1.0.
 
-- measurement noise
-- operating system scheduling effects
-- CPU frequency scaling
-- cache effects
-- very short runtime of the target program
-- background load on the system
+We spent a while trying to explain it and discussed several plausible causes:
 
-We did not fully solve or eliminate these anomalies. Instead, we documented them honestly. This was an important engineering lesson: benchmarking very short programs is difficult, and measurement results need interpretation.
+- **Measurement noise.** For programs that finish in a couple of milliseconds, the timing
+  noise is on the same order as the thing we are measuring.
+- **Scheduling effects.** The OS scheduler decides when our processes actually run, and a
+  lucky or unlucky scheduling slot can swamp the real difference.
+- **CPU frequency scaling.** The CPU changes clock speed dynamically. If it ramped up
+  between the untraced and traced runs, the later run can finish faster for reasons that
+  have nothing to do with tracing.
+- **Cache effects.** By the time the traced run executes, the program's pages and the
+  loader's work may already be warm in cache, making it faster than the "cold" untraced
+  run.
+- **Extremely short runtimes.** All of the above hit hardest when the program barely runs
+  at all, which is exactly when we saw the anomaly.
 
----
-
-## 10. Web UI
-
-The Web UI was the final major feature. It made the project much easier to present and use.
-
-The dashboard reads:
-
-- `results/runs_index.json`
-- `profile.json`
-- `benchmark.json`
-- `summary.txt`
-- generated PNG charts
-
-It shows runs, programs, benchmark values, summaries and visualizations in a browser.
-
-A key design decision was that the Web UI is read-only. It does not modify the C profiler, does not write to the registry and does not change result files. It is only a consumer of existing artifacts.
-
-This separation kept the system understandable:
-
-- C produces the data
-- Python visualizes the data
-- Flask displays the data
-
-The Web UI also confirmed that the earlier registry and run directory decisions were useful. Because every run has a stable ID and path, the dashboard can load and display run data cleanly.
+We are honest about the fact that we did **not** fully solve this. We are fairly confident
+it is a measurement artifact rather than a real speedup, and taking the minimum of several
+runs reduced how often it happened, but it did not eliminate it for very short programs. We
+have left it as an interesting observation rather than pretending we have a complete
+explanation, because that is the truth of where we ended up.
 
 ---
 
-## 11. Server Test Environment
+## The biggest challenge
 
-We developed and evaluated the final version on a dedicated Linux server.
+If we had to name the single hardest part of the project, it was not any one piece of code.
+It was this: **turning a simple command-line syscall tracer into a complete observability
+platform.**
 
-### Hardware
+When we look back, the project grew in distinct stages, and each stage forced new design
+decisions:
 
-- CPU: Intel Core i7-11700F
-- Cores / Threads: 8 cores / 16 threads
-- RAM: 32 GB DDR4
-- GPU: NVIDIA RTX 3060 Ti, 8 GB VRAM
+- **Syscall tracing.** Getting `ptrace` working, then following children and threads
+  correctly.
+- **Persistent run storage.** Once we ran things repeatedly, we needed a consistent place
+  to put results, which led to the `results/<program>/<timestamp>/` layout, unique run
+  IDs, and handling the case where two runs happen in the same second.
+- **Benchmarking.** Measuring overhead reliably, which forced us to think about noise,
+  repetition, and what a "fair" measurement even is.
+- **Visualization.** Turning numbers into pictures, which is a completely different skill
+  from systems programming.
+- **Automated summaries.** Deciding what is worth saying about a run and writing rules that
+  say it consistently.
+- **The registry system.** Indexing every run so other tools could find them without
+  rescanning the disk, and doing the index writes atomically so a crash could not corrupt
+  it.
+- **The Web UI dashboard.** Presenting all of the above in a browser, read-only and safe.
 
-### Software
-
-- Operating System: Ubuntu Server 24.04.4 LTS
-- Linux Kernel: 6.8.0-111-generic
-- Compiler: GCC 13.3.0
-- Build system: GNU Make
-- Main tracing interface: `ptrace()`
-- Visualization: Python, pandas, matplotlib
-- Web UI: Flask
-
-We chose the server because it made the project feel closer to a real monitoring tool. Instead of only tracing one command on a laptop, we could collect many runs, store them centrally and inspect them through a Web UI.
-
----
-
-## 12. Biggest Challenge
-
-The biggest challenge was turning a simple command-line syscall tracer into a complete observability platform.
-
-At the beginning, the main problem was technical: how do we trace syscalls with `ptrace()` and count them correctly? But every solved problem created a new question:
-
-- If we can trace syscalls, how do we profile them?
-- If we can profile them, how do we store the results?
-- If we store the results, how do we avoid overwriting old runs?
-- If we have many runs, how do we find them again?
-- If we have JSON files, how do we make them understandable?
-- If we have charts and summaries, how do we present them cleanly?
-- If we have a dashboard, how do we keep it read-only and consistent?
-
-This gradual evolution was the central engineering challenge. We learned that adding features is not only about writing more code. It also means deciding where responsibility belongs, what should be stored, what should be computed dynamically and how different parts of the system should communicate.
+Each new feature was not just "more code." Each one introduced its own design questions:
+how to store data so future tools could read it, how to keep different components from
+stepping on each other, how to keep the data layer independent from the presentation
+layer. The challenge was less about any single algorithm and more about growing a small
+program into a coherent system without it turning into a mess.
 
 ---
 
-## 13. Lessons Learned
+## Lessons learned
 
-We learned a lot about operating systems, but also about software engineering.
+Looking back, here is what we actually took away from this project:
 
-### Understanding ptrace
+- **Understanding `ptrace`.** We now genuinely understand how a tracer attaches to a
+  tracee, how syscall-stops work, and how to follow forks and threads.
+- **Understanding syscall behavior.** We learned to recognize what programs do from their
+  system calls — library loading via `mmap`, directory scanning via `getdents64`, and so
+  on.
+- **Raw traces are hard to interpret.** Maybe the biggest lesson: complete data is not the
+  same as understandable data.
+- **Separating collection from visualization.** Keeping the C profiler (collection) cleanly
+  separate from the Python visualizer (interpretation) made both far easier to work on.
+- **Storing runs consistently.** A predictable directory and naming scheme made everything
+  downstream simpler.
+- **Building a registry.** We learned why an index is worth having and why writing it
+  atomically matters.
+- **Generating useful summaries automatically.** Writing rules that produce consistent,
+  human-readable text was harder and more interesting than we expected.
+- **Designing a user-friendly Web UI.** We learned to think about a read-only API,
+  artifact-based status, and not letting users break things through the interface.
+- **Benchmarking overhead correctly.** We learned how noisy real measurements are and why
+  methodology (repetition, minimums, isolating the traced loop) matters.
+- **Deploying on a real Linux server.** Running the tool on a dedicated server taught us
+  about persistence, remote access, and the difference between a script and a system.
 
-Before this project, `ptrace()` was mostly an abstract word for us. We learned that it is event-driven and that the tracer must react to process stops. We also learned that syscall entry and exit must be handled separately.
-
-### Understanding syscall behavior
-
-We were surprised by how many syscalls simple programs make. Even `ls` performs many file and memory operations before the visible output appears. This made dynamic linking, process startup and OS abstractions much more concrete.
-
-### Understanding interpretation
-
-Collecting raw data is not enough. The first JSON files were technically correct, but hard to understand. The visualizer and summary system were our answer to that problem.
-
-### Understanding benchmarking
-
-We learned that benchmark results are not automatically true just because they are numbers. Especially for very short programs, the operating system scheduler, CPU state and cache effects can strongly influence results.
-
-### Understanding project growth
-
-We realized that the project became much larger because we kept asking how a real user would interact with the output. This pushed us from terminal traces toward persistent runs, summaries and the Web UI.
-
----
-
-## 14. Limitations
-
-The project has several limitations.
-
-- It is Linux-only.
-- It is designed for x86-64.
-- `ptrace()` introduces measurable overhead.
-- Timing values include tracing overhead.
-- Benchmark results can be affected by scheduling and system load.
-- Very short-running programs can produce inconsistent benchmark results.
-- Some benchmark runs showed traced execution appearing faster than untraced execution.
-- Not all benchmark anomalies could be fully explained.
-- Not all syscall arguments are decoded.
-- The Web UI is local and read-only, not a production monitoring service.
-- The system does not yet provide live streaming or alerting.
-
-We do not see these as failures. They are realistic engineering limitations of our chosen design.
+The throughline of all of these is that our understanding deepened in layers, the same way
+the project itself grew in layers.
 
 ---
 
-## 15. Future Work
+## Limitations
 
-The current system is a strong foundation, but there are many possible extensions.
+We want to be honest about what our tool cannot do:
 
-### eBPF backend
+- It is a **Linux-only** solution, tied to `ptrace` and the x86-64 syscall table.
+- `ptrace` introduces **measurable overhead**, because the tracee stops twice per system
+  call. This is fine for analysis but not for production-grade, always-on tracing.
+- **Benchmark results are influenced by OS scheduling**, CPU frequency scaling, and cache
+  behavior, so they vary between runs.
+- **Extremely short-running programs** sometimes produced inconsistent benchmark results.
+- In a small number of runs, **traced programs appeared faster than untraced programs**,
+  which is clearly a measurement artifact rather than a real effect.
+- We believe these anomalies come from **measurement noise, scheduling, cache behavior, or
+  CPU frequency scaling**, but we could **not fully explain every case**.
 
-The most important technical improvement would be an eBPF backend. This could reduce overhead significantly and make the tool more suitable for production-like monitoring.
-
-### Live monitoring
-
-Instead of only showing completed runs, the Web UI could show syscall activity live while a program is running.
-
-### Alerting
-
-The system could detect suspicious behavior, for example unusual file access, unexpected process creation or high syscall volume.
-
-### Historical trends
-
-Because runs are already stored persistently, the Web UI could compare behavior over time. It could show whether a program became more syscall-heavy or whether overhead changed.
-
-### Remote agents and multi-host support
-
-A future version could run small agents on multiple servers and collect their results in one dashboard.
-
-### AI-assisted observability agent
-
-An ambitious extension would be an assistant that can answer natural-language questions about the server, for example:
-
-```text
-What happened on my server today?
-Which program generated the most system calls?
-Show me unusual behavior in the last 24 hours.
-```
-
-This could also be connected to Telegram or another chat interface.
+We see these as realistic engineering limitations of the approach we chose, not as failures
+of the project.
 
 ---
 
-## 16. Project Reflection and Conclusion
+## Future work
 
-When we started, we thought we were building a syscall tracer. By the end, we had built something closer to a small observability platform.
+We designed the system so the data layer and the presentation layer can grow
+independently, and most of our future ideas are about growing it into a fuller
+observability platform:
 
-The most important lesson was that observability is not only about gathering information. It is about making information understandable. A large trace file can contain valuable data, but if nobody can interpret it quickly, its usefulness is limited.
+- An **eBPF backend** as an alternative to `ptrace`, for much lower overhead and far better
+  scalability on busy systems.
+- A **live monitoring dashboard** with **real-time syscall streaming** into the Web UI.
+- An **alerting system** that flags suspicious behavior, such as unexpected network or
+  process activity.
+- **Historical trend analysis** and **long-term run comparison** across many runs.
+- A **remote agent architecture** and **distributed monitoring across multiple servers**,
+  with **multi-host support**, so several machines report into one console.
+- An **AI-assisted observability agent** that answers natural-language questions like
+  *"What happened on my server today?"*, *"Which program generated the most system
+  calls?"*, or *"Show me unusual behavior in the last 24 hours."*
+- **Telegram integration** so the platform can notify us about important events.
 
-That realization shaped the project. We added summaries because raw syscall tables were hard to read. We added visualizations because charts communicate patterns faster than JSON. We added a registry because many runs need structure. We added a Web UI because browsing a dashboard is easier than manually opening folders.
-
-We also learned that every design decision has consequences. Choosing `ptrace()` made the project understandable and educational, but introduced overhead. Storing run metadata in a registry made the Web UI easier, but forced us to think carefully about stale state. Generating summaries without AI made the output reproducible, but required us to define clear rules.
-
-Overall, we are happy with the final result. The project started as a simple local tracer and evolved into a system that can collect, analyze, visualize and compare syscall behavior through a unified workflow. It helped us understand operating systems more deeply, especially system calls, process control, tracing overhead and the difficulty of turning low-level data into useful information.
+These are ambitious, but every one of them is a natural extension of what we already built.
 
 ---
 
-## References
+## Final reflection and conclusion
 
-- Linux manual pages: `ptrace(2)`, `waitpid(2)`, `fork(2)`, `clone(2)`, `execve(2)`, `clock_gettime(2)`
-- Linux x86-64 syscall table
-- Operating Systems course material, University of Basel, Spring Semester 2026
-- Silberschatz, Galvin, Gagne: Operating System Concepts
-- Michael Kerrisk: The Linux Programming Interface
-- Flask documentation
-- pandas documentation
-- matplotlib documentation
-- strace project documentation
-- Brendan Gregg: BPF Performance Tools
+When we started, we thought we were building a syscall tracer. We finished having built
+something quite different, and the gap between those two things is the most important thing
+we learned.
+
+The project began as a relatively simple tracer: run a program, collect its system calls,
+print them. But during development we kept bumping into the same realization — collecting
+raw system calls is, on its own, not very useful to most people. A trace file can contain
+enormous amounts of valuable information, but actually *interpreting* that information takes
+real effort and a fair bit of operating-system knowledge. We were doing that interpretation
+in our heads every single time, and that did not scale.
+
+So our focus gradually shifted. We stopped asking "how do we collect more data?" and
+started asking "how do we make this data understandable?" That shift is what produced the
+automated behavior summaries, the benchmarking support, the visualization pipeline, the run
+registry, and the Web UI dashboard. None of those were in the original plan. All of them
+exist because we realized that data you cannot understand is not much better than no data
+at all.
+
+The most important lesson of the whole project is this: **observability is not only about
+gathering information — it is about presenting information in a way that humans can
+understand and act upon.** Throughout the project we kept coming back to the same three
+goals: improving the **interpretability**, the **usability**, and the **accessibility** of
+the data we collected. Almost every feature we are proud of exists to serve one of those
+three.
+
+The result is that our final system is no longer just a syscall tracer. It evolved into a
+small observability platform — one that lets a user collect, analyze, visualize, and
+compare system call behavior through a single, unified workflow. We did not set out to
+build that. We built it because the project kept teaching us what was actually missing, and
+we kept following where the data led.
+
+---
+
+## Test environment
+
+We developed and tested the project on a dedicated Ubuntu server. We chose a dedicated
+machine deliberately: we wanted the tool to be permanently available, to accumulate many
+runs over time, and to be reachable remotely through the Web UI — a setup much closer to a
+real monitoring environment than a laptop used occasionally.
+
+**Hardware**
+
+| Component | Specification                                  |
+|-----------|------------------------------------------------|
+| CPU       | Intel Core i7-11700F, 8 cores / 16 threads     |
+| RAM       | 32 GB DDR4                                      |
+| GPU       | NVIDIA RTX 3060 Ti, 8 GB VRAM                   |
+| Storage   | 1 TB NVMe SSD + 1 TB HDD + 4 TB external SSD    |
+
+**Software**
+
+| Component  | Version                     |
+|------------|-----------------------------|
+| OS         | Ubuntu Server 24.04.4 LTS   |
+| Kernel     | 6.8.0-111-generic           |
+| Compiler   | GCC 13.3.0                  |
+| Build      | GNU Make                    |
+| Tracing    | Linux `ptrace()`            |

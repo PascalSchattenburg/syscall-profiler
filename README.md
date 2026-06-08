@@ -1,676 +1,666 @@
-# System Call Profiler & Tracer
+# Syscall Profiler — Observability Console
 
-A Linux system call profiler, tracer, benchmark tool, visualization pipeline and local Web UI for analyzing how programs interact with the operating system through system calls.
+A Linux x86-64 system call profiler and tracer written in C with `ptrace()`, extended
+into a small observability platform: a run registry, a benchmarking system, a
+visualization pipeline, and a local web dashboard.
 
-The project was built for the Operating Systems course at the University of Basel. It started as a command-line `ptrace()` tracer and evolved into a small observability platform for a dedicated Ubuntu server. The system can trace a program, count and categorize its system calls, measure tracing overhead, store runs persistently, generate charts and summaries, and display all collected runs in a browser-based dashboard.
-
----
-
-## Table of Contents
-
-1. [Project Overview](#1-project-overview)
-2. [Features](#2-features)
-3. [Architecture](#3-architecture)
-4. [Project Structure](#4-project-structure)
-5. [Installation](#5-installation)
-6. [Build](#6-build)
-7. [Usage](#7-usage)
-8. [Benchmarking](#8-benchmarking)
-9. [Visualization](#9-visualization)
-10. [Run Registry](#10-run-registry)
-11. [Web UI](#11-web-ui)
-12. [Example Workflow](#12-example-workflow)
-13. [Limitations](#13-limitations)
-14. [Future Work](#14-future-work)
-15. [Test Environment](#15-test-environment)
-16. [Troubleshooting](#16-troubleshooting)
+The C profiler traces a target program, records how often each system call is used and
+how long it takes, and writes structured results to disk. Every run is indexed so that
+later tools — the benchmarker, the Python visualizer, and the Flask Web UI — can find,
+analyze, compare, and present it.
 
 ---
 
 ## 1. Project Overview
 
-The System Call Profiler & Tracer observes how a Linux program communicates with the operating system kernel. When a program opens a file, allocates memory, creates a process, reads data, writes output, or performs many other privileged operations, it does so through a system call.
+At its core, the profiler runs a target program under `ptrace()`, intercepts every
+system call the program makes, and builds a per-syscall summary: call counts, total
+time, average time, and a behavioral category (file, memory, network, process, signal,
+IPC, time, other). Each profiling run is stored in its own directory and registered in a
+central index.
 
-This project launches a target program under `ptrace()` control and stops it at every system call entry and exit. It records:
+Around that core we built four cooperating components:
 
-- the system call name
-- decoded arguments where supported
-- the return value and errno information
-- the system call category
-- the number of calls
-- total and average syscall time
-- the relation between traced and untraced runtime
+- A **run registry** that keeps a lightweight index of every run so other tools can
+  discover runs without rescanning the filesystem.
+- A **benchmarking system** that measures the overhead `ptrace` adds, by timing the same
+  program traced and untraced.
+- A **visualization pipeline** (Python) that turns the raw JSON into charts and a
+  plain-language summary of what the program actually did.
+- A **Web UI** (Flask) that reads everything back and presents runs, profiles,
+  benchmarks, summaries, and charts in the browser.
 
-The project can be understood as a simplified combination of:
-
-- `strace` for live syscall tracing
-- `strace -c` for aggregated statistics
-- a benchmark tool for tracing overhead
-- a visualization pipeline for charts and summaries
-- a Web UI for browsing collected runs
-
-The final version is not only a terminal tool anymore. It stores every run in a structured results directory, indexes runs in a registry, generates deterministic behavior summaries, and exposes the collected data through a local dashboard.
+The C profiler has no Python dependency and can be built and used entirely on its own.
+The visualizer and Web UI are optional layers on top of the data it produces.
 
 ---
 
 ## 2. Features
 
-### Core profiler
-
-- Live system call tracing with `ptrace()`
-- Syscall entry and exit handling
-- Return value and errno decoding
-- Category labels such as file system, memory, process, IPC and system
-- Per-syscall count, total time and average time
-- Profile report printed after execution
-- CSV export
-- JSON export
-- Filtering with `--only`, `--exclude` and `--top`
-
-### Benchmarking
-
-- Compare normal execution against traced execution
-- Attach benchmark results to an existing profiling run
-- Store benchmark data as `benchmark.json`
-- Show overhead as multiplier and percentage
-
-### Results management
-
-- Every run gets a timestamped directory
-- Every run gets a stable `run_id`
-- Run metadata is stored in `results/runs_index.json`
-- Profile, CSV, benchmark, summary and visualization files stay together in one run directory
-
-### Visualization
-
-- Python visualization script using `pandas` and `matplotlib`
-- Generates PNG charts
-- Generates a combined report image
-- Generates a deterministic `summary.txt`
-- Accepts both `profile.json` files and full run directories
-
-### Web UI
-
-- Local Flask-based dashboard
-- Reads the existing registry and artifacts
-- Shows runs, programs, benchmark data, charts and summaries
-- Does not modify profiler data
-- Works as a read-only interface for demonstrations and server use
+- **Full syscall tracing** of a target process under `ptrace()`, following children and
+  threads created via `fork()`, `vfork()`, and `clone()`.
+- **Per-syscall statistics**: call count, total time, average time, syscall number, name,
+  and behavioral category.
+- **Eight behavioral categories**: file, memory, network, process, signal, IPC, time, and
+  other.
+- **Organized results**: every run is written to `results/<program>/<timestamp>/` and
+  indexed in `results/runs_index.json`.
+- **Multiple export formats**: human-readable terminal output, CSV, and JSON.
+- **Filtering and shaping** of both the live trace and the final report
+  (`--only`, `--exclude`, `--top`).
+- **Benchmarking mode** that reports tracing overhead, either inline (`--benchmark`) or
+  attached to an existing run (`--benchmark-run`).
+- **Visualization pipeline** producing five charts and a deterministic, rule-based
+  behavior summary.
+- **Run registry library** (C) exposing the index as plain structs for other tools.
+- **Local Web UI** (Flask, read-only) for browsing runs, profiles, benchmarks, summaries,
+  and charts.
 
 ---
 
 ## 3. Architecture
 
-The project is organized as a pipeline. Each part has a clear responsibility.
+The system is a pipeline. Each stage consumes what the previous stage produced and adds a
+new layer of interpretation:
 
-```text
-Profiler (C)
-    |
-    v
-Run Directory + Registry
-    |
-    v
-Benchmarking
-    |
-    v
-Visualization
-    |
-    v
-Web UI
+```
+    Profiler (C)
+        |
+        v
+    Run Registry
+        |
+        v
+    Benchmarking
+        |
+        v
+    Visualization
+        |
+        v
+    Web UI
 ```
 
-### Profiler
+**Profiler (C).** The foundation. It forks the target program, attaches `ptrace`,
+intercepts each system call, times it with `CLOCK_MONOTONIC`, and accumulates per-syscall
+statistics. On completion it writes `profile.json` and `results.csv` into the run
+directory and appends a metadata record to the registry. Core files: `src/tracer.c`
+(the ptrace loop and process/thread table), `src/profiler.c` (statistics),
+`src/syscall_table.c` (number → name + category), `src/output.c` (terminal/CSV/JSON
+output), `src/decoder.c`, `src/filter.c`, and `src/main.c` (CLI, run directories, and
+registry writing).
 
-The C profiler launches a target program and traces it with `ptrace()`. It collects raw syscall events and aggregates them into a profile.
+**Run Registry.** A discovery layer. The profiler appends one record per run to
+`results/runs_index.json`. The C access layer (`src/run_registry.c`) reads that index
+into `RunInfo` structs, and `src/run_artifacts.c` detects which artifacts currently exist
+on disk for a given run. This lets any later tool list and locate runs without parsing
+every result directory itself.
 
-### Registry
+**Benchmarking.** A measurement layer (`src/benchmark.c`). It runs the target program in
+two modes — untraced and traced — several times each, and reports how much overhead
+tracing added. Results are written as `benchmark.json` inside the run directory.
 
-Each completed profiling run is written to a timestamped folder and indexed in `results/runs_index.json`. The registry stores metadata only, not full syscall data.
+**Visualization.** An interpretation layer (`visualize.py`). It reads `profile.json`,
+produces five charts, and generates a plain-language `summary.txt` describing the
+program's behavior. This is where raw numbers become something a human can read at a
+glance.
 
-### Benchmarking
-
-Benchmarking can be run separately or attached to an existing run with `--benchmark-run`. This keeps benchmark data in the same directory as the profile.
-
-### Visualization
-
-The Python visualizer reads `profile.json`, generates charts and creates a deterministic behavior summary. The summary is rule-based and not AI-generated.
-
-### Web UI
-
-The Flask Web UI reads `runs_index.json` and the run artifacts from disk. It does not call or modify the C profiler. It is a read-only consumer of the generated data.
+**Web UI.** A presentation layer (`webui/app.py`). A small read-only Flask app that loads
+the registry and each run's artifacts and serves them through a browser dashboard. It
+never runs the C profiler and never writes to the results directory; it only reads what
+the other stages produced.
 
 ---
 
 ## 4. Project Structure
 
-```text
-syscall-profiler/
-│
-├── src/
-│   ├── main.c
-│   ├── tracer.c
-│   ├── profiler.c
-│   ├── decoder.c
-│   ├── args.c
-│   ├── output.c
-│   ├── filter.c
-│   ├── benchmark.c
-│   ├── syscall_table.c
-│   ├── run_artifacts.c
-│   └── run_registry.c
-│
-├── include/
-│   ├── tracer.h
-│   ├── args.h
-│   ├── profiler.h
-│   ├── decoder.h
-│   ├── output.h
-│   ├── filter.h
-│   ├── benchmark.h
-│   ├── syscall_table.h
-│   ├── run_artifacts.h
-│   └── run_registry.h
-│
-├── webui/
-│   ├── app.py
-│   ├── requirements.txt
-│   ├── templates/
-│   │   ├── index.html
-│   └── static/
-│   │   ├── fonts/
-│
-├── results/
-│   ├── runs_index.json
-│   └── <program>/<timestamp>/
-│       ├── profile.json
-│       ├── results.csv
-│       ├── benchmark.json
-│       ├── summary.txt
-│       └── *.png
-│
-├── visualize.py
-├── requirements.txt
-├── Makefile
-├── README.md
-└── report/
-    └── report.md
 ```
+syscall_profiler_uni/
+├── Makefile                  Build rules for the C profiler
+├── README.md                 This file
+├── requirements.txt          Python deps for the visualizer (matplotlib, pandas)
+├── visualize.py              Visualization pipeline + summary generator
+│
+├── include/                  C headers
+│   ├── tracer.h              ptrace loop interface
+│   ├── profiler.h            statistics accumulation
+│   ├── syscall_table.h       syscall number -> name + category
+│   ├── output.h              terminal / CSV / JSON output
+│   ├── decoder.h, filter.h, args.h, benchmark.h
+│
+├── src/                      C sources (one .c per header above)
+│   ├── main.c                CLI, run directories, registry writing
+│   ├── tracer.c              ptrace loop, fork/thread following
+│   ├── profiler.c            per-syscall statistics
+│   ├── syscall_table.c       syscall table + categories
+│   ├── output.c              output formats
+│   ├── benchmark.c           overhead measurement
+│   ├── run_registry.c        reads runs_index.json into RunInfo
+│   └── run_artifacts.c       detects profile.json / benchmark.json / report
+│
+├── tests/                    C test programs
+│   ├── registry_test.c
+│   └── artifact_test.c
+│
+├── report/
+│   └── report.md             Project report (development diary)
+│
+├── webui/                    Local web dashboard (Flask, read-only)
+│   ├── app.py                Flask app + JSON API
+│   ├── requirements.txt      Web UI deps (Flask)
+│   ├── generate_demo_data.sh seeds sample runs for a quick demo
+│   ├── templates/            index.html (single-page dashboard)
+│   └── static/               self-hosted fonts and assets
+│
+└── results/                  created at runtime (git-ignored)
+    ├── runs_index.json       the run registry
+    └── <program>/<timestamp>/
+        ├── profile.json      per-syscall statistics
+        ├── results.csv       same data as CSV
+        ├── benchmark.json    overhead measurement (if benchmarked)
+        ├── summary.txt        plain-language summary (if visualized)
+        └── *.png             charts (if visualized)
+```
+
+`results/` is created the first time you profile something and is excluded from version
+control by `.gitignore`.
 
 ---
 
 ## 5. Installation
 
-The C profiler itself only needs Linux, GCC and Make. The visualization pipeline and Web UI need Python packages installed inside a virtual environment.
+**Requirements**
 
-### System packages
+- A Linux x86-64 system (the profiler uses Linux `ptrace` and the x86-64 syscall table).
+- `gcc` and `make` for the C profiler.
+- Python 3 with `matplotlib` and `pandas` for the visualizer (optional).
+- `Flask` for the Web UI (optional).
 
-On Ubuntu:
-
-```bash
-sudo apt update
-sudo apt install build-essential python3 python3-venv python3-pip
-```
-
-### Clone or unpack the project
+**Get the code**
 
 ```bash
-git clone <repository-url>
-cd syscall-profiler
+git clone <your-repository-url>
+cd syscall_profiler_uni
 ```
+
+The C profiler needs nothing beyond `gcc` and `make`. Python is only required if you want
+charts, summaries, or the Web UI — see [Section 12](#12-python-virtual-environment) for
+the virtual environment.
+
+---
 
 ## 6. Build
 
-Build the C profiler:
+Build the profiler with a single command:
 
 ```bash
 make
 ```
 
-This creates:
+This compiles every source file in `src/` with `gcc -Wall -Wextra -g -std=gnu99 -I include`
+and links the `profiler` binary into the project root.
 
-```text
-./profiler
-```
+Other Make targets:
 
-Clean the build:
-
-```bash
-make clean
-```
-
-Run the included smoke tests, if available:
-
-```bash
-make test
-```
+| Command            | What it does                                        |
+|--------------------|-----------------------------------------------------|
+| `make`             | Build the `profiler` binary                         |
+| `make run`         | Build, then trace `ls` as a quick smoke test        |
+| `make run-csv`     | Build, run, and export CSV                           |
+| `make run-find`    | Trace `find` (a syscall-heavy program)              |
+| `make test`        | Run a few quick self-tests (`ls`, `echo`, `true`)   |
+| `make clean`       | Remove object files and the binary                  |
+| `make help`        | Print available targets and usage examples          |
 
 ---
 
 ## 7. Usage
 
-General command format:
+Basic form:
 
 ```bash
-./profiler [options] <program> [program arguments...]
+./profiler [OPTIONS] <program> [program-args...]
 ```
 
-### Profile a simple command
+Profile a program:
 
 ```bash
 ./profiler ls
+./profiler ls -la
+./profiler -q cat /etc/hostname
 ```
 
-Example with arguments:
+**Options**
 
-```bash
-./profiler ls -la /usr/bin
+| Option                 | Effect                                                              |
+|------------------------|---------------------------------------------------------------------|
+| `-q`                   | Quiet mode — suppress the live, real-time trace output              |
+| `-n`                   | No color — plain text (useful when piping to a file)                |
+| `-c <file>`            | Export results to a CSV file                                        |
+| `-h`                   | Show help                                                           |
+| `--only=a,b,c`         | Show ONLY these syscalls (affects both the trace and the report)    |
+| `--exclude=a,b`        | Hide these syscalls (affects both the trace and the report)         |
+| `--top=N`              | Show only the top N entries in the final report                     |
+| `--json=<file>`        | Export the full results as JSON to an explicit path                 |
+| `--results-dir=<dir>`  | Base directory for run artifacts (default: `results/`)              |
+| `--benchmark`          | Measure ptrace overhead inline (not added to the registry)          |
+| `--benchmark-run <dir>`| Attach a benchmark to an existing run directory                     |
+
+`--only` and `--exclude` cannot be combined.
+
+**What a normal run produces.** Every normal profiling run automatically creates a run
+directory and indexes it:
+
+```
+results/<program>/<timestamp>/
+    profile.json     full per-syscall statistics
+    results.csv      the same data in CSV form
 ```
 
-Quiet mode:
+The `<timestamp>` has the form `YYYY-MM-DD_HH-MM-SS` (filesystem-safe and chronologically
+sortable). Each run also receives a unique run ID of the form `run_<8 hex digits>` and is
+appended to `results/runs_index.json`.
 
-```bash
-./profiler -q ls
+**`profile.json` (excerpt)**
+
+```json
+{
+  "run_id": "run_aa810cf4",
+  "timestamp": "2026-06-08_19-36-47",
+  "program": "ls",
+  "total_syscalls": 74,
+  "unique_syscalls": 20,
+  "syscalls": [
+    {
+      "number":   9,
+      "name":     "mmap",
+      "category": "MEM ",
+      "count":    17,
+      "total_ms": 0.111448,
+      "avg_ms":   0.006556
+    }
+  ]
+}
 ```
 
-No color output:
+**`results.csv` (header + first rows)**
 
-```bash
-./profiler -n ls
+```
+syscall_number,syscall_name,category,call_count,total_time_ms,avg_time_ms
+12,brk,MEM ,3,0.016253,0.005418
+9,mmap,MEM ,17,0.111448,0.006556
+257,openat,FILE,7,0.064287,0.009184
 ```
 
-Export to CSV:
-
-```bash
-./profiler -c results.csv ls
-```
-
-Export to JSON:
-
-```bash
-./profiler --json=profile.json ls
-```
-
-### Filtering
-
-Show only selected syscalls:
-
-```bash
-./profiler --only=openat,read,write,close ls
-```
-
-Exclude selected syscalls:
-
-```bash
-./profiler --exclude=mmap,mprotect,brk ls
-```
-
-Show only the top N rows in the final report:
-
-```bash
-./profiler --top=5 ls
-```
-
-### Help
-
-```bash
-./profiler -h
-```
-
-The help output should document the main workflow commands, including profiling, benchmarking, visualization and Web UI startup.
+Categories are stored as short fixed-width labels (`FILE`, `MEM `, `NET `, `PROC`,
+`SIG `, `IPC `, `TIME`, `OTHR`) corresponding to the eight behavioral categories.
 
 ---
 
 ## 8. Benchmarking
 
-Benchmarking compares normal execution with traced execution.
+The benchmarker answers a practical question: *how much does tracing slow a program
+down?* It times the target program in two modes:
 
-### Benchmark directly
+- **untraced** — fork + exec + wait, with no `ptrace` attached;
+- **traced** — the same program under a minimal `ptrace(PTRACE_SYSCALL)` loop, with no
+  decoding or output, to measure pure tracing cost.
+
+Each mode is run **three times** and the **minimum** of each is kept, since the minimum
+best represents uncontended, best-case performance. Timing uses `CLOCK_MONOTONIC`
+wall-clock measured by the parent around `fork()`/`waitpid()`.
+
+**Inline benchmark** (prints a report, does not touch the registry):
 
 ```bash
 ./profiler --benchmark ls
+./profiler --benchmark find /usr -maxdepth 2
 ```
 
-### Attach a benchmark to an existing run
-
-Recommended workflow:
+**Attach a benchmark to an existing run** (recommended): this reads the program name from
+the run's `profile.json`, reconstructs the command, runs the benchmark, and writes
+`benchmark.json` into the same directory while inheriting that run's `run_id` and
+`timestamp`:
 
 ```bash
-./profiler ls
-./profiler --benchmark-run results/ls/<timestamp>
+./profiler --benchmark-run results/ls/2026-06-08_19-36-47
 ```
 
-The second command writes:
+**`benchmark.json`**
 
-```text
-results/ls/<timestamp>/benchmark.json
+```json
+{
+  "run_id": "run_aa810cf4",
+  "timestamp": "2026-06-08_19-36-47",
+  "program": "ls",
+  "untraced_ms":  2.070469,
+  "traced_ms":    1.755309,
+  "overhead_pct": -15.22,
+  "overhead_x":   0.85
+}
 ```
 
-This keeps the benchmark together with the profile, CSV, visualization and summary of the same run.
-
-### Interpreting overhead
-
-The benchmark reports values such as:
-
-```text
-Normal execution: 2.804 ms
-Traced execution: 1.010 ms
-Overhead: 0.36x
-```
-
-Usually traced execution should be slower because `ptrace()` stops the traced program at every syscall entry and exit. In very short programs, measurement noise, scheduling effects, CPU frequency scaling and cache effects can sometimes produce inconsistent results. For this reason, benchmark numbers should be interpreted carefully, especially for tiny commands such as `pwd`, `true` or very small `ls` runs.
+`overhead_x` is `traced_ms / untraced_ms` and `overhead_pct` is the percentage change.
+For very short-running programs these numbers can be noisy; see
+[Limitations](#13-limitations) for a discussion, including the occasional case where a
+traced run measures *faster* than an untraced one.
 
 ---
 
 ## 9. Visualization
 
-The visualization system uses Python and therefore requires the project virtual environment.
-
-### Create and activate the Python environment
-
-From the project root:
+The visualizer turns a profiling run into charts and a readable summary. It accepts either
+a `profile.json` file or a run directory containing one:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+python3 visualize.py results/ls/2026-06-08_19-36-47
+python3 visualize.py results/ls/2026-06-08_19-36-47/profile.json
 ```
 
-Verify that the environment is active:
+**Options**
 
-```bash
-which python3
+| Option           | Effect                                                            |
+|------------------|-------------------------------------------------------------------|
+| `--top N`        | How many syscalls to show in the bar charts (default: 15)         |
+| `--out DIR`      | Output directory for the PNGs (default: next to the JSON/run dir) |
+| `--no-combined`  | Skip the combined overview image                                  |
+| `--program CMD`  | Override the program name shown on the charts                     |
+
+When given a run directory, the charts and `summary.txt` are written back into that same
+directory, alongside the data.
+
+**Outputs**
+
+- `syscall_counts.png` — top N syscalls by call count
+- `syscall_distribution.png` — share of total calls per syscall
+- `category_breakdown.png` — calls grouped by behavioral category
+- `slowest_syscalls.png` — top N by average time
+- `syscall_report.png` — all four charts on one page
+- `summary.txt` — a deterministic, plain-language behavior summary
+
+**`summary.txt` (real output for `ls`)**
+
+```
+Program traced: ls
+
+Most activity was file-system related (57%).
+The program opened files 7 times, read data 7 times, wrote data 1 time, and scanned directories 2 times.
+Memory mapping activity (17 mmap calls) was mostly caused by loading shared libraries at startup.
+The remaining 5 syscall types were grouped into 'other' and accounted for 6.8% of all observed system calls. These are lower-frequency operations grouped together to keep the visualization readable.
+
+In total: 74 syscalls across 20 distinct types.
 ```
 
-Expected result:
+This summary is generated by rule-based logic, not by any AI model or network service: the
+same `profile.json` always produces the exact same text. The detailed mechanism is
+described in the project report.
 
-```text
-/path/to/project/.venv/bin/python3
-```
-
-If the virtual environment is not active, the visualizer may fail with:
-
-```text
-ModuleNotFoundError: No module named 'pandas'
-```
-
-### Visualize a run
-
-Recommended:
-
-```bash
-python3 visualize.py results/ls/<timestamp>
-```
-
-The script reads:
-
-```text
-results/ls/<timestamp>/profile.json
-```
-
-and writes:
-
-```text
-summary.txt
-syscall_counts.png
-syscall_distribution.png
-category_breakdown.png
-slowest_syscalls.png
-syscall_report.png
-```
-
-into the same run directory.
-
-### Visualize a profile file directly
-
-```bash
-python3 visualize.py results/ls/<timestamp>/profile.json
-```
+The visualizer requires `matplotlib` and `pandas`, so it must be run inside the Python
+virtual environment ([Section 12](#12-python-virtual-environment)).
 
 ---
 
 ## 10. Run Registry
 
-The run registry is stored at:
+The registry is how the system keeps track of every run without rescanning the filesystem.
 
-```text
-results/runs_index.json
-```
-
-It contains one metadata entry per completed profiling run:
+**On disk.** Each normal profiling run appends one metadata record to
+`results/runs_index.json`. The file is an array of records:
 
 ```json
-{
-  "run_id": "run_a8f3d21c",
-  "program": "ls",
-  "timestamp": "2026-06-07_10-06-16",
-  "path": "results/ls/2026-06-07_10-06-16",
-  "total_syscalls": 75,
-  "unique_syscalls": 20
-}
+[
+  {
+    "run_id": "run_aa810cf4",
+    "program": "ls",
+    "timestamp": "2026-06-08_19-36-47",
+    "path": "results/ls/2026-06-08_19-36-47",
+    "total_syscalls": 74,
+    "unique_syscalls": 20
+  }
+]
 ```
-Each profiling run receives a stable run_id. The run identifier allows the Web UI to reference and locate runs independently of their physical directory path. This makes run lookups more robust and avoids relying solely on timestamps or filesystem locations.
 
-The registry is intentionally metadata-only. It does not store mutable artifact flags such as `has_benchmark` or `has_visualization`, because those values can become stale. Instead, artifact existence is detected dynamically from the run directory.
+The profiler appends to this file atomically (it writes a temporary file and renames it),
+so a crash mid-write cannot corrupt the index. Inline `--benchmark` and `--benchmark-run`
+do **not** add entries — they are not complete profiling runs.
 
-Example:
+**In C.** `src/run_registry.c` (with `include/run_registry.h`) reads the index into plain
+structs so other tools can use it:
 
-- `profile.json` exists -> profile available
-- `benchmark.json` exists -> benchmark available
-- `syscall_report.png` exists -> visualization available
+- `registry_load("results")` returns a `RunRegistry` that owns an array of `RunInfo`.
+- `registry_find_by_id(...)` and `registry_find_by_program(...)` look up records.
+- `registry_free(...)` releases the registry.
 
-This design prevents stale registry entries and prepares the project for Web UI and API-style usage.
+A `RunInfo` holds `run_id`, `program`, `timestamp`, `path`, `total_syscalls`, and
+`unique_syscalls` in fixed-size buffers (no nested allocations).
+
+**Artifact detection.** `src/run_artifacts.c` (with `include/run_artifacts.h`) answers a
+different question — *which artifacts exist on disk right now?* — via
+`run_detect_artifacts(run_dir)`, which reports whether `profile.json`, `benchmark.json`,
+and `syscall_report.png` are present. Artifact state is never cached; it is detected fresh
+each time, because a run can gain a benchmark or charts long after it was first profiled.
+
+The test programs `tests/registry_test.c` and `tests/artifact_test.c` exercise these two
+modules.
 
 ---
 
 ## 11. Web UI
 
-The Web UI is a local Flask dashboard that reads the existing results directory.
+The Web UI is a small, **read-only** Flask dashboard for browsing runs in the browser. It
+reads `results/runs_index.json` and each run's artifacts directly; it never invokes the C
+profiler and never writes to `results/`.
 
-### Start the Web UI
-
-From the project root:
+**Start it**
 
 ```bash
 cd webui
-source .venv/bin/activate
+source ../.venv/bin/activate      # the Python venv (see Section 12)
+python app.py
+# then open http://127.0.0.1:5000
+```
+
+To point the Web UI at a results directory elsewhere, set `SYSCALL_RESULTS_DIR`:
+
+```bash
+SYSCALL_RESULTS_DIR=/mnt/data/profiles python app.py
+```
+
+For a quick demonstration without profiling anything yourself, seed sample runs first:
+
+```bash
+cd webui
+./generate_demo_data.sh
 python app.py
 ```
 
-Then open:
+**JSON API**
 
-```text
-http://127.0.0.1:5000
-```
+| Endpoint                              | Returns                                            |
+|---------------------------------------|----------------------------------------------------|
+| `GET /`                               | The single-page dashboard                          |
+| `GET /api/runs`                       | All runs from the registry, enriched with status   |
+| `GET /api/run/<id>`                   | One run's metadata                                  |
+| `GET /api/run/<id>/artifacts`         | Which artifacts exist for that run                 |
+| `GET /api/run/<id>/summary`           | The plain-language `summary.txt`                   |
+| `GET /api/run/<id>/benchmark`         | The `benchmark.json` (if present)                  |
+| `GET /api/run/<id>/profile`           | The full `profile.json`                            |
+| `GET /api/run/<id>/image/<name>`      | A chart PNG (whitelisted filenames only)           |
+| `GET /api/programs`                   | Programs seen across all runs                      |
 
-If the app is configured to listen on all interfaces, it can also be opened from another device using the server IP:
+**Run status.** Each run is labeled by artifact availability only — there is no
+performance judgment:
 
-```text
-http://<server-ip>:5000
-```
+- **OK** — both `profile.json` and `syscall_report.png` are present (fully processed).
+- **INCOMPLETE** — something required is missing.
 
-### Web UI behavior
+`benchmark.json` is optional and never affects status. The image route only serves the
+five known chart filenames, which prevents path-traversal through the `<name>` parameter.
 
-The Web UI:
-
-- reads `results/runs_index.json`
-- reads `profile.json`
-- reads `benchmark.json`
-- reads `summary.txt`
-- serves generated PNG charts
-- shows run status dynamically
-- does not modify profiler data
-- does not write to the results directory
-
-### Web UI dependencies
-
-The Web UI has its own requirements file:
-
-```bash
-cd webui
-pip install -r requirements.txt
-```
-
-If the same root `.venv` is used, activate it before starting the app.
+Fonts are self-hosted under `webui/static/`, so the dashboard works without any external
+network access.
 
 ---
 
-## 12. Example Workflow
+## 12. Python Virtual Environment
 
-This is the recommended full workflow for a complete run.
+The **visualizer** (`visualize.py`) and the **Web UI** (`webui/app.py`) require Python
+packages. The recommended way to install them is a virtual environment so they do not
+interfere with system Python.
+
+**Create the environment (once):**
 
 ```bash
-# 1. Build profiler
+python3 -m venv .venv
+```
+
+**Activate it (every new shell):**
+
+```bash
+source .venv/bin/activate
+```
+
+**Install the dependencies:**
+
+```bash
+pip install -r requirements.txt          # visualizer: matplotlib, pandas
+pip install -r webui/requirements.txt    # Web UI: Flask
+```
+
+**Why this matters.** If you run the visualizer or Web UI *without* an active environment
+that has the packages installed, Python will fail with an error like:
+
+```
+ModuleNotFoundError: No module named 'pandas'
+```
+
+This almost always means the virtual environment is not active (or the dependencies were
+never installed into it). The C profiler is unaffected — it has no Python dependency and
+runs fine without any of this.
+
+**Verify the environment is active.** When the venv is active your shell prompt is usually
+prefixed with `(.venv)`. You can also check explicitly:
+
+```bash
+which python        # should point inside .../.venv/bin/python
+python -c "import pandas, matplotlib; print('ok')"
+```
+
+If `which python` points at `/usr/bin/python` instead of your `.venv`, the environment is
+not active — run `source .venv/bin/activate` again.
+
+To leave the environment:
+
+```bash
+deactivate
+```
+
+---
+
+## 13. Example Workflow
+
+A complete end-to-end session, from building the tool to viewing the results in the
+browser:
+
+```bash
+# 1. Build the profiler
 make
 
-# 2. Create Python environment once
+# 2. Profile a program (creates results/ls/<timestamp>/ and indexes it)
+./profiler ls
+
+# 3. Set up Python (first time only)
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r webui/requirements.txt
 
-# 3. Profile a program
-./profiler ls
-
-# 4. Attach benchmark to the generated run
+# 4. Attach a benchmark to the run you just created
+#    (replace <timestamp> with the directory that step 2 printed)
 ./profiler --benchmark-run results/ls/<timestamp>
 
-# 5. Generate visualizations and summary
+# 5. Generate charts + summary into that same run directory
 python3 visualize.py results/ls/<timestamp>
 
-# 6. Start Web UI
+# 6. Browse everything in the Web UI
 cd webui
-source .venv/bin/activate
 python app.py
+# open http://127.0.0.1:5000
 ```
 
-A complete run directory then contains:
-
-```text
-profile.json
-results.csv
-benchmark.json
-summary.txt
-syscall_counts.png
-syscall_distribution.png
-category_breakdown.png
-slowest_syscalls.png
-syscall_report.png
-```
+After step 5 the run directory is "OK" in the Web UI, because it now contains both
+`profile.json` and `syscall_report.png`.
 
 ---
 
-## 13. Limitations
+## 14. Limitations
 
-- Linux-only implementation.
-- x86-64 specific register layout.
-- `ptrace()` introduces measurable overhead.
-- Timing values include tracing overhead.
-- Benchmark measurements can be influenced by scheduling, cache effects and CPU frequency scaling.
-- Very short-running programs can produce inconsistent benchmark values.
-- Some benchmark results showed traced execution appearing faster than untraced execution; this is interpreted as measurement noise, not as a real speedup.
-- The tool currently launches new programs; attaching to arbitrary already-running processes is not the main focus.
-- The Web UI is local and read-only; it is not hardened as a production web service.
+- **Linux-only.** The profiler depends on Linux `ptrace` and an x86-64 syscall table. It
+  does not run on macOS or Windows.
+- **Tracing overhead.** `ptrace` stops the tracee twice per system call, which adds real,
+  measurable overhead. The profiler is a learning and analysis tool, not a zero-cost
+  production tracer.
+- **Scheduler-sensitive benchmarks.** Benchmark numbers are affected by OS scheduling, CPU
+  frequency scaling, and cache state. Running the same benchmark twice can give different
+  numbers.
+- **Short programs are noisy.** For extremely short-running programs (a few milliseconds),
+  measurement noise can dominate. In a small number of such runs the *traced* execution
+  even measured faster than the untraced one (a negative `overhead_pct`). This is a
+  measurement artifact, not a real speedup; it is discussed in detail in the project
+  report and we do not claim to have fully explained every such case.
+- **Per-syscall timing includes tracing cost.** The reported `total_ms`/`avg_ms` per
+  syscall are measured under `ptrace` and therefore include tracing overhead. They are
+  best used for *relative* comparison between syscalls, not as absolute kernel timings.
 
----
-
-## 14. Future Work
-
-Possible future extensions:
-
-- eBPF backend for lower-overhead tracing
-- live monitoring dashboard
-- real-time syscall streaming
-- alerting for suspicious behavior
-- historical trend analysis
-- long-term comparison of runs
-- remote agent architecture
-- distributed monitoring across multiple servers
-- multi-host support
-- improved Web UI search and filtering
-- AI-assisted observability agent
-- Telegram integration
-- natural-language queries such as:
-  - "What happened on my server today?"
-  - "Which program generated the most system calls?"
-  - "Show me unusual behavior in the last 24 hours."
-
-The current project already has a useful foundation for these ideas because it stores runs persistently, assigns stable run IDs, keeps artifacts grouped per run, and exposes the data through a dashboard.
+These are presented as honest engineering trade-offs of a `ptrace`-based approach.
 
 ---
 
-## 15. Test Environment
+## 15. Future Work
 
-The project was developed and evaluated on a dedicated Linux server.
+The project is structured so the data layer and the presentation layer can grow
+independently. Planned and possible directions, focused on the observability platform:
 
-### Hardware
-
-- CPU: Intel Core i7-11700F
-- Cores / Threads: 8 cores / 16 threads
-- RAM: 32 GB DDR4
-- GPU: NVIDIA RTX 3060 Ti, 8 GB VRAM
-
-### Software
-
-- Operating System: Ubuntu Server 24.04.4 LTS
-- Kernel: 6.8.0-111-generic
-- Compiler: GCC 13.3.0
-- Build system: GNU Make
-- Main tracing interface: `ptrace()`
-- Programming language: C
-- Visualization: Python, pandas, matplotlib
-- Web UI: Python, Flask
-
-The dedicated server was chosen because it allowed us to collect many runs over time, keep profiling artifacts centrally stored, and test the project in a more realistic monitoring scenario than a short local laptop demo.
+- **eBPF backend** as an alternative to `ptrace` for much lower overhead and better
+  scaling on busy systems.
+- **Live monitoring dashboard** with real-time syscall streaming into the Web UI.
+- **Alerting** for suspicious behavior (for example, unexpected network or process
+  activity).
+- **Historical trend analysis** and **long-term run comparison** across many runs.
+- **Remote agent architecture** and **multi-host / distributed monitoring** so several
+  servers report into one console.
+- **AI-assisted observability** with natural-language queries such as
+  *"What happened on my server today?"*, *"Which program generated the most system
+  calls?"*, or *"Show me unusual behavior in the last 24 hours."*
+- **Notifications** (for example, Telegram integration) for important events.
 
 ---
 
-## 16. Troubleshooting
+## 16. Test Environment
 
-### `ModuleNotFoundError: No module named 'pandas'`
+The project was developed and tested on a dedicated Ubuntu server. A dedicated machine was
+chosen so the tool could run continuously, accumulate many runs over time, and be reached
+remotely through the Web UI — a setup much closer to a real monitoring environment than a
+laptop used occasionally.
 
-Activate the virtual environment and install requirements:
+**Hardware**
 
-```bash
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+| Component | Specification                                        |
+|-----------|------------------------------------------------------|
+| CPU       | Intel Core i7-11700F, 8 cores / 16 threads           |
+| RAM       | 32 GB DDR4                                            |
+| GPU       | NVIDIA RTX 3060 Ti, 8 GB VRAM                         |
+| Storage   | 1 TB NVMe SSD + 1 TB HDD + 4 TB external SSD          |
 
-Then rerun:
+**Software**
 
-```bash
-python3 visualize.py results/ls/<timestamp>
-```
+| Component  | Version                          |
+|------------|----------------------------------|
+| OS         | Ubuntu Server 24.04.4 LTS        |
+| Kernel     | 6.8.0-111-generic                |
+| Compiler   | GCC 13.3.0                       |
+| Build      | GNU Make                         |
+| Tracing    | Linux `ptrace()`                 |
 
-### Web UI starts but cannot be reached from another computer
+---
 
-By default Flask may bind only to localhost. For remote access, ensure `app.py` binds to:
-
-```python
-host="0.0.0.0"
-```
-
-Then open:
-
-```text
-http://<server-ip>:5000
-```
-
-Also check firewall settings.
-
-### `ptrace: Operation not permitted`
-
-The environment may restrict tracing. This can happen in containers or hardened systems. Run on a normal Linux host or allow the necessary tracing permissions.
-
-### Benchmark results look strange
-
-Very short programs can produce noisy measurements. Repeat the benchmark, close background load, and interpret results as approximate overhead measurements rather than perfect kernel timing.
-
-### Visualizations are missing in the Web UI
-
-Run the visualizer for the specific run:
-
-```bash
-source .venv/bin/activate
-python3 visualize.py results/<program>/<timestamp>
-```
-
-The Web UI marks visualization as available when the expected PNG files, especially `syscall_report.png`, exist in the run directory.
+*Built as an Operating Systems course project. See `report/report.md` for the full
+development story, design decisions, and lessons learned.*
