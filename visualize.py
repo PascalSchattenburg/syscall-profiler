@@ -42,19 +42,80 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.gridspec import GridSpec
 
+# ── Editorial style layer (matches the Web UI) ───────────────────────────────
+# This block only changes *appearance*. No data, statistics, filenames, output
+# paths, or chart contents are affected.
+PAPER = "#fafaf8"   # off-white paper background
+INK   = "#0d0d0d"   # dark ink text / rules
+GRID  = "#d0cdc7"   # very subtle gridlines
+MUTED = "#8a8a8a"   # muted grey for secondary annotations
+
+# Playfair Display for titles (with graceful serif fallback); IBM Plex Mono for
+# everything else (with graceful monospace fallback). If the actual fonts are
+# not installed, matplotlib falls back cleanly to a serif / monospace face.
+SERIF      = ["Playfair Display", "Georgia", "DejaVu Serif", "serif"]
+MONO_STACK = ["IBM Plex Mono", "DejaVu Sans Mono", "monospace"]
+
+
+def _register_fonts():
+    """Best-effort: register IBM Plex Mono / Playfair Display if TTF/OTF files
+    are available (system fonts, or webui/static/fonts). woff2 is ignored
+    because matplotlib cannot read it — in that case we fall back to clean
+    serif / monospace families. Never fails."""
+    try:
+        import glob
+        from matplotlib import font_manager
+        here = os.path.dirname(os.path.abspath(__file__))
+        for d in (os.path.join(here, "webui", "static", "fonts"),):
+            for ext in ("*.ttf", "*.otf"):
+                for fp in glob.glob(os.path.join(d, ext)):
+                    try:
+                        font_manager.fontManager.addfont(fp)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
+def setup_style():
+    """Apply the editorial/print look globally. Call once before plotting."""
+    _register_fonts()
+    plt.rcParams.update({
+        "figure.facecolor":  PAPER,
+        "savefig.facecolor": PAPER,
+        "axes.facecolor":    PAPER,
+        "font.family":       MONO_STACK,
+        "font.size":         10,
+        "text.color":        INK,
+        "axes.edgecolor":    INK,
+        "axes.labelcolor":   INK,
+        "axes.linewidth":    0.8,
+        "axes.titlecolor":   INK,
+        "xtick.color":       INK,
+        "ytick.color":       INK,
+        "xtick.labelsize":   9,
+        "ytick.labelsize":   9,
+        "axes.grid":         False,
+        "grid.color":        GRID,
+        "grid.linewidth":    0.6,
+        "legend.frameon":    False,
+        "legend.fontsize":   8,
+    })
+
+
 # ── Colour palette ──────────────────────────────────────────────────────────
-# One distinct colour per category, consistent across all charts.
+# One distinct, muted colour per category, consistent across all charts.
 CATEGORY_COLORS = {
-    "FILE": "#4CAF50",   # green
-    "MEM ": "#FF9800",   # orange
-    "NET ": "#2196F3",   # blue
-    "PROC": "#9C27B0",   # purple
-    "SIG ": "#F44336",   # red
-    "IPC ": "#00BCD4",   # cyan
-    "TIME": "#9E9E9E",   # grey
-    "SYS ": "#607D8B",   # blue-grey
+    "FILE": "#2d5fa3",   # blue
+    "MEM ": "#8a6a2f",   # ochre / brown
+    "NET ": "#7c3f3f",   # muted red
+    "PROC": "#5a4b8a",   # muted violet
+    "SIG ": "#9c5a3f",   # muted terracotta
+    "IPC ": "#2f7a6a",   # muted teal
+    "TIME": "#8a8a8a",   # muted grey
+    "SYS ": "#666666",   # dark grey
 }
-DEFAULT_COLOR = "#78909C"
+DEFAULT_COLOR = "#b8b4ac"
 
 def category_color(cat):
     """Return the plot colour for a category string."""
@@ -244,7 +305,7 @@ def chart_counts(df, top_n, out_path):
     colors = [category_color(c) for c in top["category"]]
 
     fig, ax = plt.subplots(figsize=(12, 5))
-    bars = ax.bar(top["name"], top["count"], color=colors, edgecolor="white",
+    bars = ax.bar(top["name"], top["count"], color=colors, edgecolor=INK,
                   linewidth=0.8, zorder=2)
 
     # Value labels on each bar
@@ -252,15 +313,15 @@ def chart_counts(df, top_n, out_path):
         ax.text(bar.get_x() + bar.get_width() / 2,
                 bar.get_height() + max(top["count"]) * 0.01,
                 str(int(val)), ha="center", va="bottom",
-                fontsize=8, color="#333333", fontweight="bold")
+                fontsize=8, color=INK, fontweight="bold")
 
     ax.set_title(f"Top {top_n} Syscalls by Call Count",
-                 fontsize=14, fontweight="bold", pad=14)
+                 fontsize=15, fontweight="bold", pad=16, fontfamily=SERIF, color=INK)
     ax.set_xlabel("Syscall", fontsize=11)
     ax.set_ylabel("Number of Calls", fontsize=11)
     ax.set_xticks(range(len(top)))
     ax.set_xticklabels(top["name"], rotation=40, ha="right", fontsize=9)
-    ax.yaxis.grid(True, linestyle="--", alpha=0.6, zorder=0)
+    ax.yaxis.grid(True, linestyle="-", linewidth=0.6, color=GRID, alpha=1.0, zorder=0)
     ax.set_axisbelow(True)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -314,11 +375,11 @@ def chart_distribution(df, top_n, out_path, program=""):
     names = [names[k] for k in order]
     pcts  = [pcts[k]  for k in order]
     cats  = [cats[k]  for k in order]
-    colors = [category_color(c) if c != "OTHER" else "#BDBDBD" for c in cats]
+    colors = [category_color(c) if c != "OTHER" else "#b8b4ac" for c in cats]
 
     fig, ax = plt.subplots(figsize=(11, max(4, len(names) * 0.45)))
     bars = ax.barh(range(len(names)), pcts, color=colors,
-                   edgecolor="white", linewidth=0.8, zorder=2)
+                   edgecolor=INK, linewidth=0.8, zorder=2)
 
     # Percentage label at the end of each bar
     max_pct = max(pcts) if pcts else 1
@@ -326,7 +387,7 @@ def chart_distribution(df, top_n, out_path, program=""):
         ax.text(bar.get_width() + max_pct * 0.012,
                 bar.get_y() + bar.get_height() / 2,
                 f"{pct:.1f}%", va="center", ha="left",
-                fontsize=9, fontweight="bold", color="#333333")
+                fontsize=9, fontweight="bold", color=INK)
 
     # Y labels: syscall name + plain-language meaning (VIS-004)
     ylabels = []
@@ -343,10 +404,10 @@ def chart_distribution(df, top_n, out_path, program=""):
     title = "Syscall Distribution (% of total calls)"
     if program:
         title += f"\nProgram: {program}"          # VIS-002
-    ax.set_title(title, fontsize=14, fontweight="bold", pad=14)
+    ax.set_title(title, fontsize=15, fontweight="bold", pad=16, fontfamily=SERIF, color=INK)
     ax.set_xlabel("Percentage of total syscalls", fontsize=11)
     ax.set_xlim(0, max_pct * 1.15)
-    ax.xaxis.grid(True, linestyle="--", alpha=0.5, zorder=0)
+    ax.xaxis.grid(True, linestyle="-", linewidth=0.6, color=GRID, alpha=1.0, zorder=0)
     ax.set_axisbelow(True)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -385,20 +446,20 @@ def chart_categories(df, out_path):
 
     fig, ax = plt.subplots(figsize=(9, max(3, len(cat_totals) * 0.65)))
     bars = ax.barh(cat_totals["category"], cat_totals["count"],
-                   color=colors, edgecolor="white", linewidth=0.8, zorder=2)
+                   color=colors, edgecolor=INK, linewidth=0.8, zorder=2)
 
     # Value labels
     for bar, val in zip(bars, cat_totals["count"]):
         ax.text(bar.get_width() + cat_totals["count"].max() * 0.01,
                 bar.get_y() + bar.get_height() / 2,
                 f"{int(val):,}", va="center", ha="left",
-                fontsize=9, fontweight="bold", color="#333333")
+                fontsize=9, fontweight="bold", color=INK)
 
     ax.set_title("Syscalls by Category",
-                 fontsize=14, fontweight="bold", pad=14)
+                 fontsize=15, fontweight="bold", pad=16, fontfamily=SERIF, color=INK)
     ax.set_xlabel("Total Calls", fontsize=11)
     ax.set_ylabel("Category", fontsize=11)
-    ax.xaxis.grid(True, linestyle="--", alpha=0.5, zorder=0)
+    ax.xaxis.grid(True, linestyle="-", linewidth=0.6, color=GRID, alpha=1.0, zorder=0)
     ax.set_axisbelow(True)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -427,20 +488,20 @@ def chart_slowest(df, top_n, out_path):
 
     fig, ax = plt.subplots(figsize=(10, max(3, len(top) * 0.6)))
     bars = ax.barh(top["name"], top["avg_ms"],
-                   color=colors, edgecolor="white", linewidth=0.8, zorder=2)
+                   color=colors, edgecolor=INK, linewidth=0.8, zorder=2)
 
     # Value labels
     for bar, val in zip(bars, top["avg_ms"]):
         ax.text(bar.get_width() + top["avg_ms"].max() * 0.01,
                 bar.get_y() + bar.get_height() / 2,
                 f"{val:.4f} ms", va="center", ha="left",
-                fontsize=8, color="#333333")
+                fontsize=8, color=INK)
 
     ax.set_title(f"Top {top_n} Slowest Syscalls (Average Execution Time)",
-                 fontsize=14, fontweight="bold", pad=14)
+                 fontsize=15, fontweight="bold", pad=16, fontfamily=SERIF, color=INK)
     ax.set_xlabel("Average Time (ms)", fontsize=11)
     ax.set_ylabel("Syscall", fontsize=11)
-    ax.xaxis.grid(True, linestyle="--", alpha=0.5, zorder=0)
+    ax.xaxis.grid(True, linestyle="-", linewidth=0.6, color=GRID, alpha=1.0, zorder=0)
     ax.set_axisbelow(True)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -448,7 +509,7 @@ def chart_slowest(df, top_n, out_path):
     # Disclaimer about ptrace overhead
     fig.text(0.98, 0.02,
              "⚠ Times include ptrace overhead — use for relative comparison only.",
-             ha="right", va="bottom", fontsize=7, color="#888888",
+             ha="right", va="bottom", fontsize=7, color=MUTED,
              style="italic")
 
     # Legend
@@ -484,36 +545,42 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     complete story of what the program did.
     """
     fig = plt.figure(figsize=(18, 12))
-    fig.patch.set_facecolor("#FAFAFA")
+    fig.patch.set_facecolor(PAPER)
 
     gs = GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.35)
 
-    # ── Title strip (VIS-002: include program name) ──────────────
-    title = (f"System Call Profile  ·  {total_calls:,} total calls  ·  "
-             f"{unique_calls} unique syscalls")
-    if program:
-        title = f"Program: {program}\n" + title
-    fig.suptitle(
-        title,
-        fontsize=15, fontweight="bold", y=0.99, color="#1A237E"
-    )
+    # ── Title block (VIS-002: include program name) — editorial header ───
+    # Mirrors the Web UI Run Detail header: a large Playfair program title,
+    # a monospace stat line, and a thin rule. Same information as before.
+    prog_label = f"Program: {program}" if program else "System Call Profile"
+    fig.suptitle(prog_label, fontsize=24, fontstyle="italic",
+                 fontfamily=SERIF, color=INK, y=0.995)
+    fig.text(0.5, 0.963,
+             f"System Call Profile   \u00b7   {total_calls:,} total calls"
+             f"   \u2022   {unique_calls} unique syscalls",
+             ha="center", va="top", fontsize=11, fontfamily=MONO_STACK,
+             color=MUTED, transform=fig.transFigure)
+    # thin editorial rule under the title
+    fig.add_artist(plt.Line2D([0.07, 0.93], [0.948, 0.948],
+                              color=INK, linewidth=0.8,
+                              transform=fig.transFigure))
 
     # ── Panel 1: counts bar ──────────────────────────────────────
     ax1  = fig.add_subplot(gs[0, 0])
     top  = df.nlargest(min(top_n, 12), "count").sort_values("count", ascending=False)
     cols = [category_color(c) for c in top["category"]]
     bars = ax1.bar(top["name"], top["count"], color=cols,
-                   edgecolor="white", linewidth=0.7, zorder=2)
+                   edgecolor=INK, linewidth=0.7, zorder=2)
     for bar, val in zip(bars, top["count"]):
         ax1.text(bar.get_x() + bar.get_width() / 2,
                  bar.get_height() + max(top["count"]) * 0.015,
                  str(int(val)), ha="center", va="bottom",
-                 fontsize=7, fontweight="bold", color="#333")
-    ax1.set_title("Call Count (top syscalls)", fontsize=11, fontweight="bold")
+                 fontsize=7, fontweight="bold", color=INK)
+    ax1.set_title("Call Count (top syscalls)", fontsize=12, fontweight="bold", fontfamily=SERIF, color=INK)
     ax1.set_xticks(range(len(top)))
     ax1.set_xticklabels(top["name"], rotation=40, ha="right", fontsize=7)
     ax1.set_ylabel("Calls", fontsize=9)
-    ax1.yaxis.grid(True, linestyle="--", alpha=0.5, zorder=0)
+    ax1.yaxis.grid(True, linestyle="-", linewidth=0.6, color=GRID, alpha=1.0, zorder=0)
     ax1.set_axisbelow(True)
     ax1.spines["top"].set_visible(False)
     ax1.spines["right"].set_visible(False)
@@ -537,21 +604,21 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     b_names = [b_names[k] for k in order]
     b_pcts  = [b_pcts[k]  for k in order]
     b_cats  = [b_cats[k]  for k in order]
-    b_colors = [category_color(c) if c != "OTHER" else "#BDBDBD" for c in b_cats]
+    b_colors = [category_color(c) if c != "OTHER" else "#b8b4ac" for c in b_cats]
     bbars = ax2.barh(range(len(b_names)), b_pcts, color=b_colors,
-                     edgecolor="white", linewidth=0.7, zorder=2)
+                     edgecolor=INK, linewidth=0.7, zorder=2)
     bmax = max(b_pcts) if b_pcts else 1
     for bar, pct in zip(bbars, b_pcts):
         ax2.text(bar.get_width() + bmax * 0.015,
                  bar.get_y() + bar.get_height() / 2,
                  f"{pct:.1f}%", va="center", ha="left",
-                 fontsize=7, fontweight="bold", color="#333")
+                 fontsize=7, fontweight="bold", color=INK)
     ax2.set_yticks(range(len(b_names)))
     ax2.set_yticklabels(b_names, fontsize=8)
     ax2.set_xlim(0, bmax * 1.18)
-    ax2.set_title("Distribution (% of total calls)", fontsize=11, fontweight="bold")
+    ax2.set_title("Distribution (% of total calls)", fontsize=12, fontweight="bold", fontfamily=SERIF, color=INK)
     ax2.set_xlabel("% of calls", fontsize=9)
-    ax2.xaxis.grid(True, linestyle="--", alpha=0.5, zorder=0)
+    ax2.xaxis.grid(True, linestyle="-", linewidth=0.6, color=GRID, alpha=1.0, zorder=0)
     ax2.set_axisbelow(True)
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_visible(False)
@@ -564,15 +631,15 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     )
     c_colors = [category_color(c) for c in cat_totals["category"]]
     hbars = ax3.barh(cat_totals["category"], cat_totals["count"],
-                     color=c_colors, edgecolor="white", linewidth=0.7, zorder=2)
+                     color=c_colors, edgecolor=INK, linewidth=0.7, zorder=2)
     for bar, val in zip(hbars, cat_totals["count"]):
         ax3.text(bar.get_width() + cat_totals["count"].max() * 0.01,
                  bar.get_y() + bar.get_height() / 2,
                  f"{int(val):,}", va="center", ha="left",
-                 fontsize=8, fontweight="bold", color="#333")
-    ax3.set_title("Calls by Category", fontsize=11, fontweight="bold")
+                 fontsize=8, fontweight="bold", color=INK)
+    ax3.set_title("Calls by Category", fontsize=12, fontweight="bold", fontfamily=SERIF, color=INK)
     ax3.set_xlabel("Total Calls", fontsize=9)
-    ax3.xaxis.grid(True, linestyle="--", alpha=0.5, zorder=0)
+    ax3.xaxis.grid(True, linestyle="-", linewidth=0.6, color=GRID, alpha=1.0, zorder=0)
     ax3.set_axisbelow(True)
     ax3.spines["top"].set_visible(False)
     ax3.spines["right"].set_visible(False)
@@ -583,20 +650,20 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     slow_top = called.nlargest(min(top_n, 10), "avg_ms").sort_values("avg_ms")
     s_colors = [category_color(c) for c in slow_top["category"]]
     sbars = ax4.barh(slow_top["name"], slow_top["avg_ms"],
-                     color=s_colors, edgecolor="white", linewidth=0.7, zorder=2)
+                     color=s_colors, edgecolor=INK, linewidth=0.7, zorder=2)
     for bar, val in zip(sbars, slow_top["avg_ms"]):
         ax4.text(bar.get_width() + slow_top["avg_ms"].max() * 0.01,
                  bar.get_y() + bar.get_height() / 2,
-                 f"{val:.4f}", va="center", ha="left", fontsize=7, color="#333")
-    ax4.set_title("Slowest Syscalls (avg ms)", fontsize=11, fontweight="bold")
+                 f"{val:.4f}", va="center", ha="left", fontsize=7, color=INK)
+    ax4.set_title("Slowest Syscalls (avg ms)", fontsize=12, fontweight="bold", fontfamily=SERIF, color=INK)
     ax4.set_xlabel("Average Time (ms)", fontsize=9)
-    ax4.xaxis.grid(True, linestyle="--", alpha=0.5, zorder=0)
+    ax4.xaxis.grid(True, linestyle="-", linewidth=0.6, color=GRID, alpha=1.0, zorder=0)
     ax4.set_axisbelow(True)
     ax4.spines["top"].set_visible(False)
     ax4.spines["right"].set_visible(False)
     ax4.text(0.99, -0.18, "⚠ includes ptrace overhead",
              transform=ax4.transAxes, ha="right", fontsize=6,
-             color="#AAAAAA", style="italic")
+             color=MUTED, style="italic")
 
     fig.savefig(out_path, dpi=150, bbox_inches="tight",
                 facecolor=fig.get_facecolor())
@@ -725,6 +792,9 @@ def main():
                         help="Override the program name shown on charts "
                              "(normally read from the JSON 'program' field)")
     args = parser.parse_args()
+
+    # Apply the editorial/print visual style (appearance only).
+    setup_style()
 
     # ── Resolve input: file or run directory ──────────────────────
     # RESULTS-MGMT-003: the first argument may be either a profile.json
