@@ -294,6 +294,9 @@ main { min-width: 0; padding: 40px 48px 80px; border-right: 1px solid var(--rule
 
 /* ─── ACTIVITY CHART ──────────────────────────── */
 .chart-wrap { min-height: 220px; position: relative; }
+/* Run Detail: enlarge only the normal-vs-traced benchmark comparison chart. */
+.bench-cmp-chart { max-width: 620px; margin-top: 6px; }
+.bench-cmp-chart svg { height: 300px; }
 
 /* ─── TIMELINE ────────────────────────────────── */
 .timeline { display: grid; gap: 0; }
@@ -532,6 +535,14 @@ aside { padding: 40px 24px 40px; display: grid; gap: 28px; align-content: start;
   letter-spacing: 0.05em; margin-left: 4px;
 }
 
+/* Keyboard shortcuts: clean 2-column grid; first kbd has no left margin. */
+.kbd-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px;
+  font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+}
+.kbd-item { display: flex; align-items: center; white-space: nowrap; }
+.kbd-item .kbd-hint { margin-left: 0; margin-right: 7px; }
+
 /* ─── UX: SECTION INTRO TEXT ─────────────────── */
 .section-intro {
   font-family: var(--body); font-size: 12px; color: var(--ink-faint);
@@ -721,48 +732,16 @@ aside { padding: 40px 24px 40px; display: grid; gap: 28px; align-content: start;
   </main>
 
   <!-- ── ASIDE ── -->
-  <aside role="complementary" aria-label="System status and quick stats">
-    <div class="aside-section">
-      <div class="aside-title" title="Backend health checks">Tracer Health</div>
-      <div class="sys-row">
-        <div class="sys-row-label">ptrace backend<span class="sys-row-sub">syscall interception</span></div>
-        <span class="sys-row-val" style="color:var(--ok)" title="Tracer is running and ready">READY</span>
-      </div>
-      <div class="sys-row">
-        <div class="sys-row-label">Results index<span class="sys-row-sub">28 runs stored</span></div>
-        <span class="sys-row-val" style="color:var(--ok)">OK</span>
-      </div>
-      <div class="sys-row">
-        <div class="sys-row-label">Architecture<span class="sys-row-sub">kernel ABI</span></div>
-        <span class="sys-row-val">x86_64</span>
-      </div>
-      <div class="sys-row">
-        <div class="sys-row-label">Last run written<span class="sys-row-sub">results/python3/</span></div>
-        <span class="sys-row-val" style="color:var(--hi)">11:28</span>
-      </div>
-    </div>
-
-    <div class="aside-section">
-      <div class="aside-title">Most-called Syscalls <span style="font-size:8px;opacity:0.6">python3 · last run</span></div>
-      <div class="dot-density" id="topSyscalls" role="list" aria-label="Most frequent syscalls in latest python3 run"></div>
-    </div>
-
-    <div class="aside-section">
-      <div class="aside-title">Call Density Map</div>
-      <canvas id="freqMap" width="240" height="110" style="width:100%;display:block;" title="Spatial density of syscall events across the run — denser areas = higher call frequency" aria-label="Syscall frequency density map"></canvas>
-      <p class="fig-caption" style="margin-top:6px;">Fig. 2 — Dot density · python3 / last run</p>
-    </div>
-
-    <!-- UX FIX: keyboard shortcut reference in aside -->
+  <aside role="complementary" aria-label="Keyboard shortcuts">
     <div class="aside-section">
       <div class="aside-title">Keyboard Shortcuts</div>
-      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);line-height:2.2">
-        <kbd class="kbd-hint">1</kbd> Dashboard &nbsp;
-        <kbd class="kbd-hint">2</kbd> Programs<br>
-        <kbd class="kbd-hint">3</kbd> Runs &nbsp;&nbsp;&nbsp;&nbsp;
-        <kbd class="kbd-hint">4</kbd> Benchmarks<br>
-        <kbd class="kbd-hint">5</kbd> Compare &nbsp;
-        <kbd class="kbd-hint">⌫</kbd> Go back
+      <div class="kbd-grid">
+        <div class="kbd-item"><kbd class="kbd-hint">1</kbd> Dashboard</div>
+        <div class="kbd-item"><kbd class="kbd-hint">2</kbd> Programs</div>
+        <div class="kbd-item"><kbd class="kbd-hint">3</kbd> Runs</div>
+        <div class="kbd-item"><kbd class="kbd-hint">4</kbd> Benchmarks</div>
+        <div class="kbd-item"><kbd class="kbd-hint">5</kbd> Compare</div>
+        <div class="kbd-item"><kbd class="kbd-hint">⌫</kbd> Go back</div>
       </div>
     </div>
   </aside>
@@ -798,7 +777,6 @@ const API = {
 };
 
 let STATE = { runs: [], programs: [] };
-let topSyscallData = [];   // decorative sidebar list; filled from real data on load
 
 function fmtOverhead(x){ return (x===null||x===undefined) ? "\u2014" : (Number(x).toFixed(2)+"\u00d7"); }
 
@@ -1011,42 +989,9 @@ function drawSymbol(ctx, W, H, alpha){
 /* ═══════════════════════════════════════════════
    ASIDE WIDGETS
    ═══════════════════════════════════════════════ */
-function drawFreqMap() {
-  const canvas = document.getElementById("freqMap");
-  if(!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const W=canvas.width, H=canvas.height;
-  const rng = mulberry32(7);
-  ctx.fillStyle = "#f4f3f0"; ctx.fillRect(0,0,W,H);
-  const data = [{x:0.15,y:0.5,r:0.5},{x:0.35,y:0.3,r:0.8},{x:0.5,y:0.6,r:1.0},{x:0.65,y:0.4,r:0.6},{x:0.8,y:0.55,r:0.4}];
-  for(let i=0;i<1200;i++){
-    const px=rng()*W, py=rng()*H;
-    let density=0;
-    data.forEach(d=>{ const dx=(px/W)-d.x, dy=(py/H)-d.y; density += d.r * Math.exp(-(dx*dx+dy*dy)*20); });
-    if(rng() < density*0.8){
-      const sz=0.5+rng()*1;
-      ctx.beginPath(); ctx.arc(px,py,sz,0,Math.PI*2);
-      ctx.fillStyle=`rgba(13,13,13,${0.4+rng()*0.5})`; ctx.fill();
-    }
-  }
-}
-function buildTopSyscalls() {
-  const el = document.getElementById("topSyscalls");
-  if(!el) return;
-  el.innerHTML = topSyscallData.map((s,i)=>{
-    const barColor = i===0 ? "var(--hi)" : i<=2 ? "var(--ink-mid)" : "var(--ink-faint)";
-    const valColor = i===0 ? "var(--hi)" : "var(--ink-faint)";
-    const tipText = i===0 ? "Dominant syscall — investigate if unexpected" : "Normal frequency";
-    return `
-    <div class="dd-row" role="listitem" aria-label="${s.name}: ${s.pct}% of calls">
-      <span class="dd-label" title="${s.name}">${s.name}</span>
-      <div class="dd-bar" title="${s.pct}% of all syscalls in this run">
-        <div class="dd-bar-fill" style="width:${s.pct}%;background:${barColor}"></div>
-      </div>
-      <span class="dd-val" style="color:${valColor}">${s.pct}%</span>
-    </div>`;
-  }).join("");
-}
+function drawFreqMap() { /* removed in final cleanup — Call Density Map sidebar deleted */ }
+function buildTopSyscalls() { /* removed in final cleanup — Most-called Syscalls sidebar deleted */ }
+
 
 /* ═══════════════════════════════════════════════
    CHART HELPERS
@@ -1509,7 +1454,7 @@ async function renderRunDetail(id){
         <div class="metric-cell"><div class="metric-cell-label">Traced (ptrace)</div><div class="metric-cell-value" style="font-size:18px;color:var(--hi)">${(Number(b.traced_ms)||0).toFixed(3)} ms</div></div>
         <div class="metric-cell"><div class="metric-cell-label">Overhead</div><div class="metric-cell-value" style="font-size:18px">${overheadColor(fmtOverhead(b.overhead_x))}</div><div class="metric-cell-note">+${b.overhead_pct}% slower</div></div>
       </div>
-      <div class="chart-wrap" style="max-width:320px">${barChart(cmp, true)}</div>`;
+      <div class="chart-wrap bench-cmp-chart">${barChart(cmp, true)}</div>`;
   });
 
   // profile.json -> top syscalls bar + category donut
@@ -1795,21 +1740,7 @@ document.addEventListener("keydown",e=>{
    INIT
    ═══════════════════════════════════════════════ */
 buildNavLogo();
-buildTopSyscalls();
-drawFreqMap();
 runIntro();
-
-/* Fill the decorative sidebar frequency list from the busiest real run. */
-async function buildSidebarFreq(){
-  const withProfile = STATE.runs.filter(r=>r.artifacts && r.artifacts.profile);
-  if(!withProfile.length){ topSyscallData=[]; return; }
-  const target = withProfile.slice().sort((a,b)=>b.syscalls-a.syscalls)[0];
-  const prof = await API.profile(target.run_id);
-  if(!prof || !prof.syscalls || !prof.syscalls.length){ topSyscallData=[]; return; }
-  const total = prof.syscalls.reduce((s,x)=>s+(x.count||0),0)||1;
-  topSyscallData = prof.syscalls.slice().sort((a,b)=>(b.count||0)-(a.count||0)).slice(0,7)
-    .map(x=>({ name:x.name, pct: Math.round((x.count||0)/total*100) }));
-}
 
 /* Load real data once, then render the dashboard. */
 async function bootstrap(){
@@ -1818,12 +1749,10 @@ async function bootstrap(){
     STATE.runs = (rawRuns||[]).map(normalizeRun);
     STATE.programs = (rawProgs||[]).map(normalizeProgram);
     loadError = false;
-    await buildSidebarFreq();
   } catch(e){
     STATE.runs = []; STATE.programs = []; loadError = true;
     console.error("Failed to load profiler data:", e);
   }
-  buildTopSyscalls();
   wireControls();
   renderDashboard();
 }
