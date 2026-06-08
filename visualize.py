@@ -50,18 +50,27 @@ INK   = "#0d0d0d"   # dark ink text / rules
 GRID  = "#d0cdc7"   # very subtle gridlines
 MUTED = "#8a8a8a"   # muted grey for secondary annotations
 
-# Playfair Display for titles (with graceful serif fallback); IBM Plex Mono for
-# everything else (with graceful monospace fallback). If the actual fonts are
-# not installed, matplotlib falls back cleanly to a serif / monospace face.
-SERIF      = ["Playfair Display", "Georgia", "DejaVu Serif", "serif"]
-MONO_STACK = ["IBM Plex Mono", "DejaVu Sans Mono", "monospace"]
+# The product uses only the IBM Plex family: IBM Plex Serif for titles, IBM
+# Plex Sans for subtitles, IBM Plex Mono for axis labels, ticks, legends, and
+# annotations. These stacks are RESOLVED at runtime in setup_style(): an IBM
+# Plex face is used only if it is actually installed; otherwise the stack is
+# just the matching generic family ("serif"/"sans-serif"/"monospace"), which
+# always resolves silently — so a clean install produces zero font warnings.
+SERIF      = ["serif"]
+SANS_STACK = ["sans-serif"]
+MONO_STACK = ["monospace"]
+
+# Preferred IBM Plex family names, by role.
+_PLEX_SERIF = "IBM Plex Serif"
+_PLEX_SANS  = "IBM Plex Sans"
+_PLEX_MONO  = "IBM Plex Mono"
 
 
 def _register_fonts():
-    """Best-effort: register IBM Plex Mono / Playfair Display if TTF/OTF files
+    """Best-effort: register IBM Plex Serif / Sans / Mono if TTF/OTF files
     are available (system fonts, or webui/static/fonts). woff2 is ignored
-    because matplotlib cannot read it — in that case we fall back to clean
-    serif / monospace families. Never fails."""
+    because matplotlib cannot read it. If IBM Plex is not present we fall back
+    silently to the generic serif / sans-serif / monospace families."""
     try:
         import glob
         from matplotlib import font_manager
@@ -77,9 +86,26 @@ def _register_fonts():
         pass
 
 
+def _resolve_font_stacks():
+    """Build the family stacks, including an IBM Plex face only when it is
+    actually installed. Naming an absent font would make matplotlib emit a
+    'findfont: Font family not found' warning, so absent Plex faces are simply
+    omitted and the generic family is used instead (silent on a clean Ubuntu)."""
+    global SERIF, SANS_STACK, MONO_STACK
+    try:
+        from matplotlib import font_manager
+        have = {f.name for f in font_manager.fontManager.ttflist}
+    except Exception:
+        have = set()
+    SERIF      = ([_PLEX_SERIF] if _PLEX_SERIF in have else []) + ["serif"]
+    SANS_STACK = ([_PLEX_SANS]  if _PLEX_SANS  in have else []) + ["sans-serif"]
+    MONO_STACK = ([_PLEX_MONO]  if _PLEX_MONO  in have else []) + ["monospace"]
+
+
 def setup_style():
     """Apply the editorial/print look globally. Call once before plotting."""
     _register_fonts()
+    _resolve_font_stacks()
     plt.rcParams.update({
         "figure.facecolor":  PAPER,
         "savefig.facecolor": PAPER,
@@ -339,7 +365,7 @@ def chart_counts(df, top_n, out_path):
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  [✓] {out_path}")
+    print(f"  [OK] {out_path}")
 
 
 # ── Chart 2: Syscall distribution (VIS-001: horizontal % bar chart) ──────────
@@ -395,7 +421,7 @@ def chart_distribution(df, top_n, out_path, program=""):
         base = n.split(" ")[0]               # strip "(N)" suffix if present
         meaning = syscall_meaning(base)
         if meaning and not n.startswith("other"):
-            ylabels.append(f"{n}  ·  {meaning}")
+            ylabels.append(f"{n}  -  {meaning}")
         else:
             ylabels.append(n)
     ax.set_yticks(range(len(names)))
@@ -424,7 +450,7 @@ def chart_distribution(df, top_n, out_path, program=""):
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  [✓] {out_path}")
+    print(f"  [OK] {out_path}")
 
 
 # ── Chart 3: Calls grouped by category ───────────────────────────────────────
@@ -467,7 +493,7 @@ def chart_categories(df, out_path):
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  [✓] {out_path}")
+    print(f"  [OK] {out_path}")
 
 
 # ── Chart 4: Top N slowest syscalls by average time ──────────────────────────
@@ -508,7 +534,7 @@ def chart_slowest(df, top_n, out_path):
 
     # Disclaimer about ptrace overhead
     fig.text(0.98, 0.02,
-             "⚠ Times include ptrace overhead — use for relative comparison only.",
+             "WARNING: Times include ptrace overhead - use for relative comparison only.",
              ha="right", va="bottom", fontsize=7, color=MUTED,
              style="italic")
 
@@ -525,7 +551,7 @@ def chart_slowest(df, top_n, out_path):
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  [✓] {out_path}")
+    print(f"  [OK] {out_path}")
 
 
 # ── Chart 5: Combined overview (all 4 on one page) ───────────────────────────
@@ -550,15 +576,15 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     gs = GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.35)
 
     # ── Title block (VIS-002: include program name) — editorial header ───
-    # Mirrors the Web UI Run Detail header: a large Playfair program title,
+    # Mirrors the Web UI Run Detail header: a large IBM Plex Serif program
     # a monospace stat line, and a thin rule. Same information as before.
     prog_label = f"Program: {program}" if program else "System Call Profile"
     fig.suptitle(prog_label, fontsize=24, fontstyle="italic",
                  fontfamily=SERIF, color=INK, y=0.995)
     fig.text(0.5, 0.963,
-             f"System Call Profile   \u00b7   {total_calls:,} total calls"
-             f"   \u2022   {unique_calls} unique syscalls",
-             ha="center", va="top", fontsize=11, fontfamily=MONO_STACK,
+             f"System Call Profile   -   {total_calls:,} total calls"
+             f"   -   {unique_calls} unique syscalls",
+             ha="center", va="top", fontsize=11, fontfamily=SANS_STACK,
              color=MUTED, transform=fig.transFigure)
     # thin editorial rule under the title
     fig.add_artist(plt.Line2D([0.07, 0.93], [0.948, 0.948],
@@ -661,14 +687,14 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     ax4.set_axisbelow(True)
     ax4.spines["top"].set_visible(False)
     ax4.spines["right"].set_visible(False)
-    ax4.text(0.99, -0.18, "⚠ includes ptrace overhead",
+    ax4.text(0.99, -0.18, "WARNING: includes ptrace overhead",
              transform=ax4.transAxes, ha="right", fontsize=6,
              color=MUTED, style="italic")
 
     fig.savefig(out_path, dpi=150, bbox_inches="tight",
                 facecolor=fig.get_facecolor())
     plt.close(fig)
-    print(f"  [✓] {out_path}")
+    print(f"  [OK] {out_path}")
 
 
 # ── VIS-003: Automatic behavioral summary ────────────────────────────────────
@@ -698,7 +724,7 @@ def generate_summary(df, total_calls, unique_calls, program="", top_n=15):
         lines.append(f"Program traced: {program}")
         lines.append("")
 
-    # Category totals → dominant category
+    # Category totals -> dominant category
     cat_totals = df.groupby("category")["count"].sum().sort_values(ascending=False)
     if len(cat_totals) > 0 and total_calls > 0:
         top_cat   = cat_totals.index[0]
@@ -868,7 +894,7 @@ def main():
     for line in summary.splitlines():
         print(f"  {line}")
     print("  ────────────────────────────────────────────────────")
-    print(f"  [✓] {summary_path}")
+    print(f"  [OK] {summary_path}")
 
     n_imgs = 4 + (0 if args.no_combined else 1)
     print(f"\n  Done! {n_imgs} PNG files + 1 summary saved to: {out_dir}\n")
