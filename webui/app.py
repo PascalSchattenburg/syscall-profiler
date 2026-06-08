@@ -345,7 +345,9 @@ def api_programs():
     programs.sort(key=lambda p: p["run_count"], reverse=True)
     return jsonify(programs)
 
-
 if __name__ == "__main__":
-    # Local analysis tool: bind to localhost, no debug reloader noise.
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=False
+    )
