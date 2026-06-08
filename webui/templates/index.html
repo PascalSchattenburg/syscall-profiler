@@ -76,7 +76,7 @@ body {
 #intro-label {
   font-family: var(--mono); font-size: 11px; letter-spacing: 0.25em;
   color: var(--ink-faint); text-transform: uppercase;
-  opacity: 0; animation: fadeLabel 0.4s 2.2s forwards;
+  opacity: 0; animation: fadeLabel 0.5s 0.7s forwards;
 }
 @keyframes fadeLabel { to { opacity: 1; } }
 
@@ -95,7 +95,7 @@ body {
   padding: 28px 0; border-right: 1px solid var(--rule);
   gap: 4px; background: var(--paper); z-index: 100;
 }
-.nav-logo { width: 40px; height: 40px; margin-bottom: 20px; cursor: pointer; flex-shrink: 0; }
+.nav-logo { width: 45px; height: 45px; margin-bottom: 20px; cursor: pointer; flex-shrink: 0; }
 .nav-spacer { flex: 1; }
 
 /* UX FIX: nav items have persistent text labels below icon */
@@ -930,11 +930,14 @@ function runIntro() {
   }
   let t = 0;
   const totalIn = 80, holdFrames = 30, totalOut = 50;
+  const SPLASH_MIN_MS = 2000;          // keep the splash visible at least ~2s
+  const splashStart = performance.now();
+  let phase = "in", tin = 0, tout = 0;
   function ease(x){ return x < 0.5 ? 2*x*x : 1-Math.pow(-2*x+2,2)/2; }
   function frame() {
     ctx.clearRect(0,0,W,H);
-    if(t < totalIn){
-      const p = ease(t/totalIn);
+    if(phase === "in"){
+      const p = ease(tin/totalIn);
       ringDots.forEach(d=>{
         const dp = Math.max(0, Math.min(1, (p - d.delay) / (1-d.delay)));
         const x = d.startX + (d.targetX - d.startX)*dp;
@@ -944,15 +947,18 @@ function runIntro() {
       });
       const symAlpha = Math.max(0,(p-0.6)/0.4);
       drawSymbol(ctx, W, H, symAlpha);
-    } else if(t < totalIn + holdFrames) {
+      tin++;
+      if(tin >= totalIn) phase = "hold";
+    } else if(phase === "hold") {
       ringDots.forEach(d=>{
         ctx.beginPath(); ctx.arc(d.targetX, d.targetY, d.r, 0, Math.PI*2);
         ctx.fillStyle = `rgba(13,13,13,${d.op})`; ctx.fill();
       });
       drawSymbol(ctx, W, H, 1);
+      // Hold the fully-formed logo until the minimum splash time has elapsed.
+      if(performance.now() - splashStart >= SPLASH_MIN_MS) phase = "out";
     } else {
-      const outT = t - totalIn - holdFrames;
-      const p = ease(outT/totalOut);
+      const p = ease(tout/totalOut);
       const scale = 1 + p*0.3;
       ringDots.forEach(d=>{
         const nx = cx + (d.targetX-cx)*scale, ny = cy + (d.targetY-cy)*scale;
@@ -960,13 +966,14 @@ function runIntro() {
         ctx.fillStyle = `rgba(13,13,13,${d.op*(1-p)})`; ctx.fill();
       });
       drawSymbol(ctx, W, H, 1-p);
+      tout++;
       if(p>=1){
-        document.getElementById("intro").style.transition = "opacity 0.4s";
+        document.getElementById("intro").style.transition = "opacity 0.5s ease";
         document.getElementById("intro").style.opacity = "0";
         setTimeout(()=>{
           document.getElementById("intro").style.display="none";
           document.getElementById("app").classList.add("visible");
-        },400);
+        },520);
         return;
       }
     }
@@ -1710,15 +1717,15 @@ function setActive(view){
 
 function render(view, payload=null){
   history_stack.push(view);
-  navTransition(()=>{
-    setActive(view);
-    root.innerHTML="";
-    if(view==="dashboard") renderDashboard();
-    else if(view==="programs") renderPrograms();
-    else if(view==="runs") openRun(STATE.runs[0] && STATE.runs[0].run_id);
-    else if(view==="benchmarks") renderBenchmarks();
-    else if(view==="comparisons") renderComparisons();
-  });
+  // Instant in-app navigation: switch immediately, no splash/loading overlay.
+  // (The splash animation runs only on initial load / hard refresh.)
+  setActive(view);
+  root.innerHTML="";
+  if(view==="dashboard") renderDashboard();
+  else if(view==="programs") renderPrograms();
+  else if(view==="runs") openRun(STATE.runs[0] && STATE.runs[0].run_id);
+  else if(view==="benchmarks") renderBenchmarks();
+  else if(view==="comparisons") renderComparisons();
 }
 
 document.querySelectorAll(".nav-btn[data-view]").forEach(btn=>{
