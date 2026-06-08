@@ -1,0 +1,7 @@
+# Web UI (Phase 004) dependencies — separate from the profiler's root
+# requirements.txt (which covers only the visualizer: matplotlib, pandas).
+#
+# The Web UI is a small local Flask app that reads the profiler's existing
+# output (results/runs_index.json and each run's artifacts). It adds no other
+# runtime dependencies.
+Flask>=3.0

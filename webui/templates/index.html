@@ -1,0 +1,1835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Syscall Profiler — Observability Research Console</title>
+<!-- Self-hosted fonts (no external CDN) so the UI renders offline during the demo. -->
+<style>
+  /* IBM Plex Mono */
+  @font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:300;font-display:swap;src:url("/static/fonts/ibm-plex-mono-latin-300-normal.woff2") format("woff2");}
+  @font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:400;font-display:swap;src:url("/static/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");}
+  @font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:500;font-display:swap;src:url("/static/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");}
+  @font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:600;font-display:swap;src:url("/static/fonts/ibm-plex-mono-latin-600-normal.woff2") format("woff2");}
+  @font-face{font-family:"IBM Plex Mono";font-style:italic;font-weight:400;font-display:swap;src:url("/static/fonts/ibm-plex-mono-latin-400-italic.woff2") format("woff2");}
+  /* Playfair Display */
+  @font-face{font-family:"Playfair Display";font-style:normal;font-weight:400;font-display:swap;src:url("/static/fonts/playfair-display-latin-400-normal.woff2") format("woff2");}
+  @font-face{font-family:"Playfair Display";font-style:normal;font-weight:600;font-display:swap;src:url("/static/fonts/playfair-display-latin-600-normal.woff2") format("woff2");}
+  @font-face{font-family:"Playfair Display";font-style:normal;font-weight:700;font-display:swap;src:url("/static/fonts/playfair-display-latin-700-normal.woff2") format("woff2");}
+  @font-face{font-family:"Playfair Display";font-style:italic;font-weight:400;font-display:swap;src:url("/static/fonts/playfair-display-latin-400-italic.woff2") format("woff2");}
+  @font-face{font-family:"Playfair Display";font-style:italic;font-weight:700;font-display:swap;src:url("/static/fonts/playfair-display-latin-700-italic.woff2") format("woff2");}
+  /* Source Serif 4 */
+  @font-face{font-family:"Source Serif 4";font-style:normal;font-weight:300;font-display:swap;src:url("/static/fonts/source-serif-4-latin-300-normal.woff2") format("woff2");}
+  @font-face{font-family:"Source Serif 4";font-style:normal;font-weight:400;font-display:swap;src:url("/static/fonts/source-serif-4-latin-400-normal.woff2") format("woff2");}
+  @font-face{font-family:"Source Serif 4";font-style:italic;font-weight:300;font-display:swap;src:url("/static/fonts/source-serif-4-latin-300-italic.woff2") format("woff2");}
+</style>
+<style>
+/* ═══════════════════════════════════════════════
+   SYSCALL PROFILER — PRINTED EDITORIAL SYSTEM
+   Visual Language: Halftone · Stipple · Print
+   ═══════════════════════════════════════════════ */
+
+:root {
+  --ink:       #0d0d0d;
+  --ink-mid:   #3a3a3a;
+  --ink-light: #666666;
+  --ink-faint: #999999;
+  --paper:     #fafaf8;
+  --paper-alt: #f4f3f0;
+  --paper-rule:#e8e6e1;
+  --rule:      #d0cdc7;
+  --accent:    #1a3a6e;
+  --accent-mid:#2d5fa3;
+  --accent-lt: #4a7cc7;
+  --ok:        #1a5c38;
+  --ok-bg:     #edf7f1;
+  --warn:      #7a4400;
+  --warn-bg:   #fef5e7;
+  --danger:    #7a1a1a;
+  --danger-bg: #fdf0f0;
+  --hi:        #1a3a6e;
+  --mono: "IBM Plex Mono", "Courier New", monospace;
+  --serif: "Playfair Display", "Georgia", serif;
+  --body: "Source Serif 4", "Georgia", serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-x: hidden;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+/* ─── INTRO ───────────────────────────────────── */
+#intro {
+  position: fixed; inset: 0; background: var(--paper);
+  z-index: 9999; display: flex; align-items: center;
+  justify-content: center; flex-direction: column; gap: 32px;
+}
+#intro-canvas { width: 260px; height: 260px; }
+#intro-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.25em;
+  color: var(--ink-faint); text-transform: uppercase;
+  opacity: 0; animation: fadeLabel 0.4s 2.2s forwards;
+}
+@keyframes fadeLabel { to { opacity: 1; } }
+
+/* ─── LAYOUT ──────────────────────────────────── */
+.app {
+  display: grid;
+  grid-template-columns: 64px minmax(0,1fr) 288px;
+  min-height: 100vh; opacity: 0; transition: opacity 0.6s ease;
+}
+.app.visible { opacity: 1; }
+
+/* ─── SIDEBAR NAV ─────────────────────────────── */
+.nav-rail {
+  position: sticky; top: 0; height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 28px 0; border-right: 1px solid var(--rule);
+  gap: 4px; background: var(--paper); z-index: 100;
+}
+.nav-logo { width: 40px; height: 40px; margin-bottom: 20px; cursor: pointer; flex-shrink: 0; }
+.nav-spacer { flex: 1; }
+
+/* UX FIX: nav items have persistent text labels below icon */
+.nav-btn {
+  width: 52px; height: 48px; border: none; background: transparent;
+  color: var(--ink-faint); cursor: pointer; display: flex;
+  flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; border-radius: 2px; position: relative; transition: color 0.15s;
+  padding: 0;
+}
+.nav-btn-icon { display: flex; align-items: center; justify-content: center; }
+.nav-btn-icon svg { width: 16px; height: 16px; stroke-width: 1.5; }
+/* UX FIX: always-visible nav labels — no more icon-only guessing */
+.nav-btn-label {
+  font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em;
+  text-transform: uppercase; line-height: 1; opacity: 0.7;
+  pointer-events: none;
+}
+.nav-btn:hover { color: var(--ink); }
+.nav-btn:hover .nav-btn-label { opacity: 1; }
+.nav-btn.active { color: var(--ink); }
+.nav-btn.active .nav-btn-label { opacity: 1; }
+.nav-btn.active::before {
+  content: ''; position: absolute; left: -1px; top: 50%;
+  transform: translateY(-50%); width: 2px; height: 24px; background: var(--ink);
+}
+/* tooltip for extra context on hover */
+.nav-btn::after {
+  content: attr(data-tooltip);
+  position: absolute; left: 62px; top: 50%; transform: translateY(-50%);
+  white-space: nowrap; font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.08em; background: var(--ink); color: var(--paper);
+  padding: 6px 12px; pointer-events: none; opacity: 0;
+  transition: opacity 0.1s; text-transform: uppercase; z-index: 200;
+}
+.nav-btn:hover::after { opacity: 1; }
+.nav-dot-divider {
+  width: 1px; height: 32px;
+  background-image: repeating-linear-gradient(to bottom, var(--rule) 0px, var(--rule) 2px, transparent 2px, transparent 6px);
+  margin: 6px 0;
+}
+
+/* ─── MAIN ────────────────────────────────────── */
+main { min-width: 0; padding: 40px 48px 80px; border-right: 1px solid var(--rule); }
+
+/* ─── PAGE HEADER ─────────────────────────────── */
+.page-header {
+  margin-bottom: 36px; padding-bottom: 24px;
+  border-bottom: 2px solid var(--ink); position: relative;
+}
+.page-header::after {
+  content: ''; position: absolute; bottom: 4px; left: 0; right: 0;
+  height: 1px; background: var(--rule);
+}
+.page-header-meta {
+  display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px;
+}
+.page-kicker {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.page-stamp { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; color: var(--ink-faint); }
+.page-header h1 {
+  font-family: var(--serif); font-size: clamp(32px, 4vw, 52px);
+  font-weight: 700; line-height: 1.0; letter-spacing: -0.02em; color: var(--ink);
+}
+.page-header h1 em { font-style: italic; font-weight: 400; }
+.page-subtitle { margin-top: 8px; font-size: 13px; color: var(--ink-light); font-family: var(--body); font-style: italic; }
+
+/* ─── TOP CONTROLS ────────────────────────────── */
+.top-controls {
+  display: flex; gap: 10px; align-items: center;
+  margin-bottom: 36px; padding-bottom: 16px; border-bottom: 1px solid var(--rule);
+  flex-wrap: wrap;
+}
+.search-field {
+  flex: 1; max-width: 280px; height: 34px;
+  border: 1px solid var(--rule); border-bottom: 1.5px solid var(--ink-mid);
+  background: transparent; padding: 0 12px; font-family: var(--mono);
+  font-size: 12px; color: var(--ink); outline: none; border-radius: 0;
+}
+.search-field::placeholder { color: var(--ink-faint); }
+.search-field:focus { border-bottom-color: var(--ink); }
+.ctrl-select {
+  height: 34px; border: 1px solid var(--rule); border-bottom: 1.5px solid var(--ink-mid);
+  background: transparent; padding: 0 10px; font-family: var(--mono);
+  font-size: 11px; color: var(--ink); outline: none; cursor: pointer; border-radius: 0;
+}
+/* UX FIX: labeled select fields so purpose is obvious */
+.ctrl-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); }
+.ctrl-group { display: flex; flex-direction: column; gap: 3px; }
+.live-badge {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink-mid);
+  border: 1px solid var(--rule); padding: 4px 10px;
+}
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--ok);
+  animation: pulse-dot 2s infinite;
+}
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+/* ─── UX: ALERT BANNER (critical finding at top) ─ */
+.alert-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; margin-bottom: 28px;
+  border: 1px solid var(--danger); border-left: 4px solid var(--danger);
+  background: var(--danger-bg); cursor: pointer;
+  font-family: var(--mono); font-size: 11px;
+  transition: background 0.1s;
+}
+.alert-banner:hover { background: #f9e8e8; }
+.alert-banner-icon { font-size: 13px; flex-shrink: 0; color: var(--danger); }
+.alert-banner-text { flex: 1; }
+.alert-banner-text strong { color: var(--danger); display: block; margin-bottom: 1px; }
+.alert-banner-text span { color: var(--ink-faint); }
+.alert-banner-cta { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--danger); border-bottom: 1px solid var(--danger); }
+
+.notice-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; margin-bottom: 28px;
+  border: 1px solid var(--warn); border-left: 4px solid var(--warn);
+  background: var(--warn-bg); font-family: var(--mono); font-size: 11px;
+}
+.notice-banner-text strong { color: var(--warn); }
+.notice-banner-text span { color: var(--ink-faint); }
+
+/* ─── VIEW TRANSITION ─────────────────────────── */
+#viewRoot { animation: print-in 0.25s ease; }
+@keyframes print-in { from{opacity:0;transform:translateY(5px)} to{opacity:1;transform:translateY(0)} }
+
+/* ─── PRINTED PANELS ──────────────────────────── */
+.panel {
+  border: 1px solid var(--ink); background: var(--paper);
+  padding: 22px 26px; position: relative;
+  box-shadow: 3px 3px 0 var(--ink-mid);
+}
+.panel-halftone {
+  background-image: radial-gradient(circle, #ccc9c2 1px, transparent 1px);
+  background-size: 6px 6px; background-color: var(--paper-alt);
+}
+.panel-title {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--ink-faint);
+  margin-bottom: 12px; display: flex; justify-content: space-between; align-items: baseline;
+}
+.panel-title-aux { font-size: 10px; color: var(--ink-faint); }
+
+/* ─── METRIC GRID ─────────────────────────────── */
+.metrics-row {
+  display: grid; grid-template-columns: repeat(5, 1fr);
+  gap: 0; border: 1px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--ink-mid); margin-bottom: 32px;
+}
+.metric-cell {
+  padding: 18px 20px; border-right: 1px solid var(--rule);
+  cursor: default; transition: background 0.15s; position: relative;
+}
+.metric-cell:last-child { border-right: none; }
+.metric-cell:hover { background: var(--paper-alt); }
+/* UX FIX: clickable metric cells get pointer + subtle affordance */
+.metric-cell.clickable { cursor: pointer; }
+.metric-cell.clickable:hover::after {
+  content: "→ inspect";
+  position: absolute; bottom: 8px; right: 10px;
+  font-family: var(--mono); font-size: 8px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.metric-cell-label {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
+}
+/* UX FIX: helper text under label explains WHY the metric matters */
+.metric-cell-helper {
+  font-family: var(--mono); font-size: 8px; letter-spacing: 0.05em;
+  color: var(--ink-faint); margin-bottom: 8px; font-style: italic;
+  line-height: 1.4;
+}
+.metric-cell-value {
+  font-family: var(--mono); font-size: clamp(20px, 2.2vw, 30px);
+  font-weight: 600; color: var(--ink); line-height: 1; margin-bottom: 4px;
+}
+.metric-cell-note { font-size: 11px; color: var(--ink-faint); font-style: italic; }
+
+/* ─── SECTION HEADER ──────────────────────────── */
+.section-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 14px; padding-bottom: 8px; border-bottom: 1px solid var(--rule);
+}
+.section-head h2 { font-family: var(--serif); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.section-head-aux { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--ink-faint); text-transform: uppercase; }
+
+/* ─── TWO COLUMN ──────────────────────────────── */
+.two-col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 28px; margin-bottom: 28px; }
+
+/* ─── ACTIVITY CHART ──────────────────────────── */
+.chart-wrap { min-height: 220px; position: relative; }
+
+/* ─── TIMELINE ────────────────────────────────── */
+.timeline { display: grid; gap: 0; }
+.timeline-row {
+  display: grid; grid-template-columns: 52px 1fr;
+  gap: 14px; align-items: start; padding: 12px 0;
+  border-bottom: 1px dotted var(--rule);
+}
+.timeline-row:last-child { border-bottom: none; }
+.tl-time { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); padding-top: 2px; }
+.tl-body strong { display: block; font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink); margin-bottom: 2px; }
+.tl-body span { font-size: 11px; color: var(--ink-faint); font-style: italic; }
+
+/* ─── PRINT TABLE ─────────────────────────────── */
+.print-table { width: 100%; border-collapse: collapse; }
+.print-table thead tr { border-bottom: 2px solid var(--ink); }
+.print-table thead th {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--ink-faint);
+  text-align: left; padding: 0 12px 10px 0; font-weight: 400;
+}
+/* UX FIX: sort affordance on sortable columns */
+.print-table thead th.sortable { cursor: pointer; }
+.print-table thead th.sortable:hover { color: var(--ink); }
+.print-table thead th.sortable::after { content: " ↕"; font-size: 8px; opacity: 0.5; }
+.print-table thead th.sort-asc::after { content: " ↑"; opacity: 1; }
+.print-table thead th.sort-desc::after { content: " ↓"; opacity: 1; }
+.print-table tbody tr { border-bottom: 1px dotted var(--rule); transition: background 0.1s; }
+/* UX FIX: clickable rows get explicit affordance */
+.print-table tbody tr.clickable { cursor: pointer; }
+.print-table tbody tr.clickable:hover { background: var(--paper-alt); }
+.print-table tbody tr.clickable:hover td:first-child::after {
+  content: " →"; color: var(--ink-faint); font-size: 11px;
+}
+.print-table tbody td {
+  font-family: var(--mono); font-size: 12px; color: var(--ink);
+  padding: 11px 12px 11px 0; vertical-align: middle;
+}
+.print-table tbody td:first-child { font-weight: 500; }
+
+/* UX FIX: no-data state for empty table */
+.table-empty {
+  padding: 40px 0; text-align: center;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+  letter-spacing: 0.1em; text-transform: uppercase; line-height: 2;
+  border-top: 1px dotted var(--rule);
+}
+
+/* ─── STATUS MARKS ────────────────────────────── */
+.status-mark {
+  display: inline-block; font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase; padding: 2px 8px;
+  border: 1px solid currentColor;
+}
+.status-mark.ok   { color: var(--ok);   background: var(--ok-bg);   border-color: var(--ok); }
+.status-mark.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); border-style: dashed; }
+.status-mark.danger { color: var(--danger); background: var(--danger-bg); border-color: var(--danger); }
+
+/* ─── PROGRAM GRID ────────────────────────────── */
+.program-grid {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 0; border: 1px solid var(--ink); box-shadow: 3px 3px 0 var(--ink-mid);
+}
+.program-cell {
+  padding: 22px; border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule); cursor: pointer;
+  transition: background 0.12s; position: relative;
+}
+.program-cell:hover { background: var(--paper-alt); }
+.program-cell:nth-child(4n) { border-right: none; }
+/* UX FIX: explicit "View runs →" CTA on hover */
+.program-cell-cta {
+  display: none; font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-faint);
+  margin-top: 12px; border-top: 1px dotted var(--rule); padding-top: 10px;
+}
+.program-cell:hover .program-cell-cta { display: block; }
+.prog-icon {
+  width: 32px; height: 32px; border: 1px solid var(--ink);
+  display: grid; place-items: center; font-family: var(--mono);
+  font-size: 11px; font-weight: 600; margin-bottom: 14px;
+  background-image: radial-gradient(circle, #ccc 1px, transparent 1px);
+  background-size: 4px 4px; background-color: var(--paper-alt);
+}
+.prog-name { font-family: var(--serif); font-size: 20px; font-weight: 600; margin-bottom: 10px; letter-spacing: -0.02em; }
+.prog-meta { font-family: var(--mono); font-size: 11px; color: var(--ink-light); line-height: 2; }
+.prog-status { position: absolute; top: 18px; right: 18px; }
+
+/* ─── TOOLBAR ─────────────────────────────────── */
+.toolbar { display: flex; gap: 0; border: 1px solid var(--rule); width: fit-content; }
+.tool-btn {
+  border: none; border-right: 1px solid var(--rule); background: transparent;
+  padding: 7px 16px; font-family: var(--mono); font-size: 11px;
+  letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint);
+  cursor: pointer; transition: background 0.1s, color 0.1s;
+}
+.tool-btn:last-child { border-right: none; }
+.tool-btn:hover, .tool-btn.active { background: var(--ink); color: var(--paper); }
+
+/* ─── SUMMARY BOX ─────────────────────────────── */
+.summary-text {
+  font-family: var(--body); font-size: 13px; line-height: 1.8;
+  color: var(--ink-light); font-style: italic; padding: 18px;
+  border-left: 3px solid var(--ink); background: var(--paper-alt);
+}
+
+/* ─── CHART GRID ──────────────────────────────── */
+.chart-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+  border: 1px solid var(--ink); box-shadow: 3px 3px 0 var(--ink-mid);
+}
+.chart-cell {
+  padding: 22px; border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule); min-height: 210px;
+  display: flex; flex-direction: column;
+}
+.chart-cell:nth-child(2n) { border-right: none; }
+.chart-cell:nth-child(n+3) { border-bottom: none; }
+/* UX FIX: chart titles now explain what they show, not just label */
+.chart-cell-title {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 4px;
+}
+.chart-cell-desc {
+  font-family: var(--mono); font-size: 9px; color: var(--ink-faint);
+  margin-bottom: 14px; font-style: italic;
+}
+
+/* ─── BENCHMARK BARS ──────────────────────────── */
+.bench-bar-wrap { margin-bottom: 18px; }
+.bench-bar-label {
+  display: flex; justify-content: space-between;
+  font-family: var(--mono); font-size: 11px; margin-bottom: 5px; color: var(--ink);
+}
+.bench-bar-label span { color: var(--ink-faint); }
+.bench-track {
+  height: 11px;
+  background-image: radial-gradient(circle, #ccc 1px, transparent 1px);
+  background-size: 4px 4px; background-color: var(--paper-alt);
+  border: 1px solid var(--rule); position: relative;
+}
+.bench-fill { height: 100%; background: var(--ink); position: relative; }
+.bench-fill.accent { background: var(--accent); }
+
+/* ─── GAUGE ───────────────────────────────────── */
+.gauge-wrap { display: flex; align-items: center; gap: 28px; padding: 12px; }
+
+/* ─── COMPARISONS ─────────────────────────────── */
+.compare-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+  border: 1px solid var(--ink); box-shadow: 3px 3px 0 var(--ink-mid);
+}
+.compare-col { padding: 26px; border-right: 1px solid var(--rule); }
+.compare-col:last-child { border-right: none; }
+.compare-col h2 { font-family: var(--serif); font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
+.compare-col .run-id {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+  letter-spacing: 0.1em; margin-bottom: 20px; padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+.compare-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 11px 0; border-bottom: 1px dotted var(--rule);
+  font-family: var(--mono); font-size: 12px;
+}
+.compare-row:last-child { border-bottom: none; }
+.compare-row-label { color: var(--ink-faint); }
+.compare-row-val { font-weight: 600; font-size: 15px; }
+/* UX FIX: delta indicator in comparison */
+.compare-delta { font-size: 10px; color: var(--ink-faint); margin-left: 6px; }
+.compare-delta.worse { color: var(--danger); }
+.compare-delta.better { color: var(--ok); }
+
+/* ─── ASIDE ───────────────────────────────────── */
+aside { padding: 40px 24px 40px; display: grid; gap: 28px; align-content: start; }
+.aside-section { border-top: 2px solid var(--ink); padding-top: 14px; }
+.aside-title {
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.25em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 14px;
+}
+.sys-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 9px 0; border-bottom: 1px dotted var(--rule);
+  font-family: var(--mono); font-size: 11px;
+}
+.sys-row:last-child { border-bottom: none; }
+.sys-row-label { color: var(--ink-light); }
+.sys-row-sub { font-size: 9px; color: var(--ink-faint); display: block; }
+.sys-row-val { font-weight: 600; font-size: 13px; }
+
+/* ─── DOT DENSITY BARS ────────────────────────── */
+.dot-density { display: grid; gap: 7px; }
+.dd-row { display: grid; grid-template-columns: 76px 1fr 36px; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10px; }
+.dd-label { color: var(--ink-light); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-val { color: var(--ink-faint); text-align: right; }
+.dd-bar { height: 7px; position: relative; background-image: radial-gradient(circle, #bbb 1px, transparent 1px); background-size: 4px 4px; }
+.dd-bar-fill { height: 100%; background: var(--ink); position: absolute; top: 0; left: 0; }
+
+/* ─── BACK BTN ────────────────────────────────── */
+.back-btn {
+  border: 1px solid var(--rule); background: transparent; padding: 6px 14px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-faint); cursor: pointer; transition: all 0.1s;
+}
+.back-btn:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+
+/* ─── FIG CAPTION ─────────────────────────────── */
+.fig-caption { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; color: var(--ink-faint); margin-top: 8px; text-transform: uppercase; }
+
+/* ─── UX: BREADCRUMB ──────────────────────────── */
+.breadcrumb {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  color: var(--ink-faint); text-transform: uppercase; margin-bottom: 18px;
+  display: flex; align-items: center; gap: 6px;
+}
+.breadcrumb a { color: var(--ink-faint); cursor: pointer; text-decoration: none; border-bottom: 1px dotted var(--rule); }
+.breadcrumb a:hover { color: var(--ink); }
+.breadcrumb-sep { opacity: 0.4; }
+
+/* ─── UX: RUN DETAIL — overhead context row ───── */
+.run-overhead-row {
+  display: flex; align-items: center; gap: 16px;
+  padding: 12px 16px; margin-bottom: 28px;
+  border: 1px solid var(--rule); background: var(--paper-alt);
+  font-family: var(--mono); font-size: 11px;
+}
+.run-overhead-row .overhead-val { font-size: 20px; font-weight: 600; }
+.run-overhead-row .overhead-label { color: var(--ink-faint); }
+.run-overhead-row .overhead-explain { color: var(--ink-faint); font-size: 10px; border-left: 1px solid var(--rule); padding-left: 14px; line-height: 1.6; }
+
+/* ─── UX: KEYBOARD HINT ───────────────────────── */
+.kbd-hint {
+  display: inline-block; font-family: var(--mono); font-size: 9px;
+  padding: 1px 5px; border: 1px solid var(--rule);
+  background: var(--paper-alt); color: var(--ink-faint);
+  letter-spacing: 0.05em; margin-left: 4px;
+}
+
+/* ─── UX: SECTION INTRO TEXT ─────────────────── */
+.section-intro {
+  font-family: var(--body); font-size: 12px; color: var(--ink-faint);
+  font-style: italic; margin-bottom: 20px; line-height: 1.6;
+  padding-bottom: 16px; border-bottom: 1px dotted var(--rule);
+}
+
+/* ─── UX: INLINE TOOLTIP ─────────────────────── */
+[data-tip] { position: relative; cursor: help; border-bottom: 1px dotted var(--rule); }
+[data-tip]:hover::before {
+  content: attr(data-tip);
+  position: absolute; bottom: calc(100% + 6px); left: 50%;
+  transform: translateX(-50%); white-space: nowrap;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.06em;
+  background: var(--ink); color: var(--paper); padding: 5px 10px;
+  z-index: 100; pointer-events: none;
+}
+
+/* ─── UX: PROGRAM DETAIL — stat summary bar ───── */
+.prog-stat-bar {
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 0; border: 1px solid var(--rule); margin-bottom: 24px;
+}
+.prog-stat-cell {
+  padding: 14px 16px; border-right: 1px solid var(--rule);
+  font-family: var(--mono);
+}
+.prog-stat-cell:last-child { border-right: none; }
+.prog-stat-label { font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 4px; }
+.prog-stat-val { font-size: 18px; font-weight: 600; }
+
+/* ─── UX: COMPARISON SELECTOR ────────────────── */
+.compare-selector {
+  display: flex; gap: 12px; align-items: center;
+  margin-bottom: 24px; font-family: var(--mono); font-size: 11px; flex-wrap: wrap;
+}
+.compare-selector label { color: var(--ink-faint); letter-spacing: 0.08em; text-transform: uppercase; font-size: 10px; }
+.compare-selector select {
+  height: 30px; border: 1px solid var(--rule); border-bottom: 1.5px solid var(--ink-mid);
+  background: transparent; padding: 0 8px; font-family: var(--mono);
+  font-size: 11px; color: var(--ink); outline: none; cursor: pointer;
+}
+.compare-selector-sep { color: var(--ink-faint); }
+
+/* ─── HALFTONE ────────────────────────────────── */
+.ht-bg {
+  background-image: radial-gradient(circle, rgba(0,0,0,0.12) 1px, transparent 1px);
+  background-size: 5px 5px;
+}
+
+/* ─── RESPONSIVE ──────────────────────────────── */
+@media (max-width: 1100px) {
+  .app { grid-template-columns: 64px minmax(0,1fr); }
+  aside { display: none; }
+  .metrics-row { grid-template-columns: repeat(3, 1fr); }
+  .program-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 720px) {
+  .app { grid-template-columns: 1fr; }
+  .nav-rail { position: fixed; bottom: 0; left: 0; right: 0; height: 60px; flex-direction: row; justify-content: center; border-right: none; border-top: 1px solid var(--rule); padding: 0 12px; z-index: 200; }
+  .nav-logo, .nav-spacer, .nav-dot-divider { display: none; }
+  .nav-btn { width: 48px; height: 52px; flex-direction: column; }
+  .nav-btn.active::before { display: none; }
+  main { padding: 24px 18px 80px; }
+  .metrics-row { grid-template-columns: repeat(2, 1fr); }
+  .two-col, .chart-grid, .compare-grid, .prog-stat-bar { grid-template-columns: 1fr; }
+  .program-grid { grid-template-columns: 1fr 1fr; }
+  .top-controls { gap: 8px; }
+  .alert-banner { flex-wrap: wrap; }
+}
+
+/* ─── TRANSITION OVERLAY ──────────────────────── */
+#nav-transition { position: fixed; inset: 0; pointer-events: none; z-index: 500; opacity: 0; }
+
+</style>
+</head>
+<body>
+
+<div id="intro">
+  <canvas id="intro-canvas" width="260" height="260"></canvas>
+  <span id="intro-label">Syscall Profiler — Observability Console</span>
+</div>
+
+<canvas id="nav-transition"></canvas>
+
+<div class="app" id="app">
+
+  <!-- ── SIDEBAR ── -->
+  <nav class="nav-rail" role="navigation" aria-label="Main navigation">
+    <svg class="nav-logo" id="navLogo" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg"
+         title="Syscall Profiler" aria-label="Go to dashboard" role="button" tabindex="0"
+         onclick="render('dashboard')" onkeydown="if(event.key==='Enter')render('dashboard')">
+    </svg>
+
+    <button class="nav-btn active" data-view="dashboard" data-tooltip="Overview of all profiling activity"
+            aria-label="Dashboard — Overview of all profiling activity">
+      <span class="nav-btn-icon">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      </span>
+      <span class="nav-btn-label">Home</span>
+    </button>
+
+    <div class="nav-dot-divider" role="separator"></div>
+
+    <button class="nav-btn" data-view="programs" data-tooltip="Browse traced binaries"
+            aria-label="Programs — Browse traced binaries">
+      <span class="nav-btn-icon">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+      </span>
+      <span class="nav-btn-label">Programs</span>
+    </button>
+
+    <button class="nav-btn" data-view="runs" data-tooltip="Inspect the latest profiling run"
+            aria-label="Runs — Inspect latest profiling run">
+      <span class="nav-btn-icon">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+      </span>
+      <span class="nav-btn-label">Runs</span>
+    </button>
+
+    <button class="nav-btn" data-view="benchmarks" data-tooltip="Measure tracing overhead vs baseline"
+            aria-label="Benchmarks — Measure tracing overhead">
+      <span class="nav-btn-icon">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M4 19V9m5 10V5m5 14v-7m5 7v-4"/></svg>
+      </span>
+      <span class="nav-btn-label">Bench</span>
+    </button>
+
+    <button class="nav-btn" data-view="comparisons" data-tooltip="Compare two runs side-by-side"
+            aria-label="Comparisons — Compare two runs side-by-side">
+      <span class="nav-btn-icon">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 4v16M4 8h4M4 12h4M4 16h4M16 8h4M16 12h4M16 16h4"/></svg>
+      </span>
+      <span class="nav-btn-label">Compare</span>
+    </button>
+
+    <div class="nav-spacer"></div>
+    <div class="nav-dot-divider" role="separator"></div>
+
+    <button class="nav-btn" data-tooltip="Export results as CSV / JSON"
+            aria-label="Export results">
+      <span class="nav-btn-icon">
+        <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 19h14"/></svg>
+      </span>
+      <span class="nav-btn-label">Export</span>
+    </button>
+  </nav>
+
+  <!-- ── MAIN ── -->
+  <main role="main">
+    <header class="page-header">
+      <div class="page-header-meta">
+        <span class="page-kicker">Linux Syscall Profiler · ptrace backend</span>
+        <span class="page-stamp" id="pageStamp">Fig. 1 — Overview</span>
+      </div>
+      <h1 id="pageTitle">Syscall <em>Control</em></h1>
+      <p class="page-subtitle" id="pageSubtitle">Observability research console for Linux system call tracing.</p>
+    </header>
+
+    <!-- Real, wired controls (populated from loaded data). -->
+    <div class="top-controls" role="search" aria-label="Filter and search">
+      <div class="ctrl-group">
+        <span class="ctrl-label">Search</span>
+        <input class="search-field" id="globalSearch" type="search" placeholder="program, syscall, timestamp…" aria-label="Filter visible rows"/>
+      </div>
+      <div class="ctrl-group">
+        <span class="ctrl-label">Filter by</span>
+        <select class="ctrl-select" id="progFilter" aria-label="Jump to a program">
+          <option value="all">All programs</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <span class="ctrl-label">Sort runs</span>
+        <select class="ctrl-select" id="sortSel" aria-label="Sort the runs table">
+          <option value="latest">Latest first</option>
+          <option value="overhead">Overhead (high first)</option>
+          <option value="syscalls">Syscalls (high first)</option>
+        </select>
+      </div>
+      <div style="flex:1"></div>
+      <div class="live-badge" id="statusBadge" title="Reading profiler output from results/">
+        <span class="live-dot"></span> <span id="statusBadgeText">reading results/</span>
+      </div>
+    </div>
+
+    <section id="viewRoot" role="region" aria-label="Main content" aria-live="polite"></section>
+  </main>
+
+  <!-- ── ASIDE ── -->
+  <aside role="complementary" aria-label="System status and quick stats">
+    <div class="aside-section">
+      <div class="aside-title" title="Backend health checks">Tracer Health</div>
+      <div class="sys-row">
+        <div class="sys-row-label">ptrace backend<span class="sys-row-sub">syscall interception</span></div>
+        <span class="sys-row-val" style="color:var(--ok)" title="Tracer is running and ready">READY</span>
+      </div>
+      <div class="sys-row">
+        <div class="sys-row-label">Results index<span class="sys-row-sub">28 runs stored</span></div>
+        <span class="sys-row-val" style="color:var(--ok)">OK</span>
+      </div>
+      <div class="sys-row">
+        <div class="sys-row-label">Architecture<span class="sys-row-sub">kernel ABI</span></div>
+        <span class="sys-row-val">x86_64</span>
+      </div>
+      <div class="sys-row">
+        <div class="sys-row-label">Last run written<span class="sys-row-sub">results/python3/</span></div>
+        <span class="sys-row-val" style="color:var(--hi)">11:28</span>
+      </div>
+    </div>
+
+    <div class="aside-section">
+      <div class="aside-title">Most-called Syscalls <span style="font-size:8px;opacity:0.6">python3 · last run</span></div>
+      <div class="dot-density" id="topSyscalls" role="list" aria-label="Most frequent syscalls in latest python3 run"></div>
+    </div>
+
+    <div class="aside-section">
+      <div class="aside-title">Call Density Map</div>
+      <canvas id="freqMap" width="240" height="110" style="width:100%;display:block;" title="Spatial density of syscall events across the run — denser areas = higher call frequency" aria-label="Syscall frequency density map"></canvas>
+      <p class="fig-caption" style="margin-top:6px;">Fig. 2 — Dot density · python3 / last run</p>
+    </div>
+
+    <!-- UX FIX: keyboard shortcut reference in aside -->
+    <div class="aside-section">
+      <div class="aside-title">Keyboard Shortcuts</div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);line-height:2.2">
+        <kbd class="kbd-hint">1</kbd> Dashboard &nbsp;
+        <kbd class="kbd-hint">2</kbd> Programs<br>
+        <kbd class="kbd-hint">3</kbd> Runs &nbsp;&nbsp;&nbsp;&nbsp;
+        <kbd class="kbd-hint">4</kbd> Benchmarks<br>
+        <kbd class="kbd-hint">5</kbd> Compare &nbsp;
+        <kbd class="kbd-hint">⌫</kbd> Go back
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════
+   COLOR HELPERS
+   ═══════════════════════════════════════════════ */
+function overheadColor(val) {
+  // Overhead is shown as a plain measured value (traced / normal). No
+  // performance threshold/judgement is applied — status is artifact-based only.
+  return `<span style="color:var(--hi);font-weight:600" title="Traced runtime / normal runtime">${val}</span>`;
+}
+function keyNum(val) { return `<span style="color:var(--hi)">${val}</span>`; }
+
+/* ═══════════════════════════════════════════════
+   DATA
+   ═══════════════════════════════════════════════ */
+/* All data now comes from the Flask backend (real profiler output).
+   The fake demo arrays have been replaced by an API client + normalized
+   state. Field names below match what the render functions already use,
+   so the editorial markup stays untouched. */
+const API = {
+  async json(path){ const r = await fetch(path); if(!r.ok) throw new Error(path+" -> "+r.status); return r.json(); },
+  async text(path){ const r = await fetch(path); return r.ok ? r.text() : null; },
+  runs(){ return this.json("/api/runs"); },
+  programs(){ return this.json("/api/programs"); },
+  profile(id){ return this.json("/api/run/"+encodeURIComponent(id)+"/profile").catch(()=>null); },
+  benchmark(id){ return this.json("/api/run/"+encodeURIComponent(id)+"/benchmark").catch(()=>null); },
+  summary(id){ return this.text("/api/run/"+encodeURIComponent(id)+"/summary"); },
+  imageURL(id,name){ return "/api/run/"+encodeURIComponent(id)+"/image/"+name; }
+};
+
+let STATE = { runs: [], programs: [] };
+let topSyscallData = [];   // decorative sidebar list; filled from real data on load
+
+function fmtOverhead(x){ return (x===null||x===undefined) ? "\u2014" : (Number(x).toFixed(2)+"\u00d7"); }
+
+function normalizeRun(r){
+  return {
+    run_id:r.run_id, program:r.program, timestamp:r.timestamp, path:r.path,
+    syscalls:r.total_syscalls||0, unique:r.unique_syscalls||0,
+    top:r.top_syscall||"\u2014", category:r.category||"\u2014",
+    overhead_x:(r.overhead_x===null||r.overhead_x===undefined)?null:Number(r.overhead_x),
+    benchmark:fmtOverhead(r.overhead_x),
+    status:r.status||"INCOMPLETE", artifacts:r.artifacts||{}
+  };
+}
+function normalizeProgram(p){
+  return {
+    id:p.program, name:p.program, runs:p.run_count||0, latest:p.latest||"\u2014",
+    overhead_x:(p.overhead_x===null||p.overhead_x===undefined)?null:Number(p.overhead_x),
+    overhead:fmtOverhead(p.overhead_x),
+    top:p.top_syscall||"\u2014", category:p.category||"\u2014",
+    status:p.status||"INCOMPLETE", syscalls:p.total_syscalls||0, unique:p.unique_syscalls||0
+  };
+}
+function runById(id){ return STATE.runs.find(r=>r.run_id===id); }
+function programByName(name){ return STATE.programs.find(p=>p.name===name); }
+
+/* Status is artifact-availability only: OK or INCOMPLETE (no performance rule). */
+function statusPill(status){
+  const cls = status==="OK" ? "ok" : "warn";
+  return `<span class="status-mark ${cls}">${status}</span>`;
+}
+function artifactPill(label, ok){
+  return `<span class="status-mark ${ok?'ok':'warn'}" title="${label}: ${ok?'present':'missing'}">${ok?'\u2713':'\u2717'} ${label}</span>`;
+}
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* Navigation shims used by inline onclick handlers in the markup. */
+function openRun(id){ renderRunDetail(id); }
+function openProgram(name){ const p=programByName(name); if(p) renderProgramDetail(p); }
+
+/* ---- header controls: real search / program filter / sort ---- */
+let currentSort = "latest";
+let loadError = false;
+function sortRuns(arr){
+  const a = arr.slice();
+  if(currentSort==="overhead") a.sort((x,y)=>(y.overhead_x===null?-1:y.overhead_x)-(x.overhead_x===null?-1:x.overhead_x));
+  else if(currentSort==="syscalls") a.sort((x,y)=>y.syscalls-x.syscalls);
+  else a.sort((x,y)=>(y.timestamp||"").localeCompare(x.timestamp||""));
+  return a;
+}
+function filterVisibleRows(q){
+  q=(q||"").trim().toLowerCase();
+  document.querySelectorAll("#viewRoot .print-table tbody tr").forEach(tr=>{
+    tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none";
+  });
+  document.querySelectorAll("#viewRoot .program-cell").forEach(c=>{
+    c.style.display = !q || c.textContent.toLowerCase().includes(q) ? "" : "none";
+  });
+}
+function wireControls(){
+  const s=document.getElementById("globalSearch");
+  if(s) s.addEventListener("input", e=>filterVisibleRows(e.target.value));
+  const pf=document.getElementById("progFilter");
+  if(pf){
+    pf.innerHTML = `<option value="all">All programs</option>` +
+      STATE.programs.map(p=>`<option value="${esc(p.name)}">${esc(p.name)} (${p.runs})</option>`).join("");
+    pf.addEventListener("change", e=>{ const v=e.target.value; if(v==="all") render("dashboard"); else openProgram(v); });
+  }
+  const ss=document.getElementById("sortSel");
+  if(ss) ss.addEventListener("change", e=>{ currentSort=e.target.value; if((history_stack[history_stack.length-1]||"dashboard")==="dashboard") renderDashboard(); });
+  const bt=document.getElementById("statusBadgeText");
+  if(bt) bt.textContent = loadError ? "backend unreachable"
+      : STATE.runs.length+" run"+(STATE.runs.length===1?"":"s")+" \u00b7 results/";
+}
+
+const ERROR_HTML = `
+  <div class="panel" style="text-align:center;padding:48px 24px">
+    <div class="panel-title" style="justify-content:center;color:var(--danger)">Cannot reach the backend</div>
+    <p style="font-family:var(--mono);font-size:11px;color:var(--ink-light);margin-top:12px;line-height:1.7">
+      The Web UI could not load <span style="font-family:var(--mono)">/api/runs</span>.
+      Make sure the server is running:<br><br>
+      <span style="color:var(--accent)">cd webui &amp;&amp; python app.py</span>
+    </p>
+  </div>`;
+
+const EMPTY_RUNS_HTML = `
+  <div class="panel" style="text-align:center;padding:48px 24px">
+    <div class="panel-title" style="justify-content:center">No profiling runs yet</div>
+    <p style="font-family:var(--mono);font-size:11px;color:var(--ink-light);margin-top:12px;line-height:1.7">
+      Generate one from the project root, then refresh:<br><br>
+      <span style="color:var(--accent)">./profiler ls</span><br>
+      <span style="color:var(--accent)">python3 visualize.py results/ls/&lt;timestamp&gt;/</span>
+    </p>
+  </div>`;
+
+/* ═══════════════════════════════════════════════
+   NAV LOGO
+   ═══════════════════════════════════════════════ */
+function buildNavLogo() {
+  const svg = document.getElementById("navLogo");
+  svg.innerHTML = buildLogoSVG(40, 40, 6, 0.0012);
+}
+function buildLogoSVG(W, H, seed, density) {
+  const cx=W/2, cy=H/2, R=W*0.46;
+  let dots = "";
+  const rng = mulberry32(seed);
+  for(let a=0; a<360; a+=2.8){
+    const rad = a * Math.PI/180;
+    const jitter = (rng()-0.5)*4;
+    const rr = R + jitter;
+    const x = cx + rr*Math.cos(rad);
+    const y = cy + rr*Math.sin(rad);
+    const sz = 0.5 + rng()*0.7;
+    const op = 0.3 + rng()*0.7;
+    dots += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${sz.toFixed(1)}" fill="#0d0d0d" opacity="${op.toFixed(2)}"/>`;
+  }
+  dots += `<path d="M${W*.3} ${H*.32} L${W*.5} ${H*.5} L${W*.3} ${H*.68}" fill="none" stroke="#0d0d0d" stroke-width="${W*0.07}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  dots += `<line x1="${W*.54}" y1="${H*.5}" x2="${W*.72}" y2="${H*.5}" stroke="#0d0d0d" stroke-width="${W*0.055}" stroke-linecap="round"/>`;
+  return dots;
+}
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    var t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   INTRO ANIMATION
+   ═══════════════════════════════════════════════ */
+function runIntro() {
+  const canvas = document.getElementById("intro-canvas");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  const cx = W/2, cy = H/2, R = W*0.36;
+  const rng = mulberry32(42);
+  const ringDots = [];
+  for(let a=0; a<360; a+=1.8){
+    const rad = a*Math.PI/180;
+    const jitter = (rng()-0.5)*8;
+    const rr = R + jitter;
+    ringDots.push({
+      x: cx + rr*Math.cos(rad), y: cy + rr*Math.sin(rad),
+      r: 0.8 + rng()*1.2, op: 0.3 + rng()*0.7,
+      targetX: cx + rr*Math.cos(rad), targetY: cy + rr*Math.sin(rad),
+      startX: cx + (rr+60+rng()*80) * Math.cos(rad + (rng()-0.5)*0.8),
+      startY: cy + (rr+60+rng()*80) * Math.sin(rad + (rng()-0.5)*0.8),
+      delay: rng()*0.5
+    });
+  }
+  let t = 0;
+  const totalIn = 80, holdFrames = 30, totalOut = 50;
+  function ease(x){ return x < 0.5 ? 2*x*x : 1-Math.pow(-2*x+2,2)/2; }
+  function frame() {
+    ctx.clearRect(0,0,W,H);
+    if(t < totalIn){
+      const p = ease(t/totalIn);
+      ringDots.forEach(d=>{
+        const dp = Math.max(0, Math.min(1, (p - d.delay) / (1-d.delay)));
+        const x = d.startX + (d.targetX - d.startX)*dp;
+        const y = d.startY + (d.targetY - d.startY)*dp;
+        ctx.beginPath(); ctx.arc(x, y, d.r, 0, Math.PI*2);
+        ctx.fillStyle = `rgba(13,13,13,${d.op*dp})`; ctx.fill();
+      });
+      const symAlpha = Math.max(0,(p-0.6)/0.4);
+      drawSymbol(ctx, W, H, symAlpha);
+    } else if(t < totalIn + holdFrames) {
+      ringDots.forEach(d=>{
+        ctx.beginPath(); ctx.arc(d.targetX, d.targetY, d.r, 0, Math.PI*2);
+        ctx.fillStyle = `rgba(13,13,13,${d.op})`; ctx.fill();
+      });
+      drawSymbol(ctx, W, H, 1);
+    } else {
+      const outT = t - totalIn - holdFrames;
+      const p = ease(outT/totalOut);
+      const scale = 1 + p*0.3;
+      ringDots.forEach(d=>{
+        const nx = cx + (d.targetX-cx)*scale, ny = cy + (d.targetY-cy)*scale;
+        ctx.beginPath(); ctx.arc(nx, ny, d.r, 0, Math.PI*2);
+        ctx.fillStyle = `rgba(13,13,13,${d.op*(1-p)})`; ctx.fill();
+      });
+      drawSymbol(ctx, W, H, 1-p);
+      if(p>=1){
+        document.getElementById("intro").style.transition = "opacity 0.4s";
+        document.getElementById("intro").style.opacity = "0";
+        setTimeout(()=>{
+          document.getElementById("intro").style.display="none";
+          document.getElementById("app").classList.add("visible");
+        },400);
+        return;
+      }
+    }
+    t++;
+    requestAnimationFrame(frame);
+  }
+  frame();
+}
+function drawSymbol(ctx, W, H, alpha){
+  if(alpha<=0) return;
+  ctx.save(); ctx.globalAlpha = alpha;
+  ctx.strokeStyle = "#0d0d0d"; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.lineWidth = W*0.055;
+  ctx.beginPath(); ctx.moveTo(W*0.32, H*0.34); ctx.lineTo(W*0.5, H*0.5); ctx.lineTo(W*0.32, H*0.66); ctx.stroke();
+  ctx.lineWidth = W*0.048;
+  ctx.beginPath(); ctx.moveTo(W*0.55, H*0.5); ctx.lineTo(W*0.72, H*0.5); ctx.stroke();
+  ctx.restore();
+}
+
+/* ═══════════════════════════════════════════════
+   ASIDE WIDGETS
+   ═══════════════════════════════════════════════ */
+function drawFreqMap() {
+  const canvas = document.getElementById("freqMap");
+  if(!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const W=canvas.width, H=canvas.height;
+  const rng = mulberry32(7);
+  ctx.fillStyle = "#f4f3f0"; ctx.fillRect(0,0,W,H);
+  const data = [{x:0.15,y:0.5,r:0.5},{x:0.35,y:0.3,r:0.8},{x:0.5,y:0.6,r:1.0},{x:0.65,y:0.4,r:0.6},{x:0.8,y:0.55,r:0.4}];
+  for(let i=0;i<1200;i++){
+    const px=rng()*W, py=rng()*H;
+    let density=0;
+    data.forEach(d=>{ const dx=(px/W)-d.x, dy=(py/H)-d.y; density += d.r * Math.exp(-(dx*dx+dy*dy)*20); });
+    if(rng() < density*0.8){
+      const sz=0.5+rng()*1;
+      ctx.beginPath(); ctx.arc(px,py,sz,0,Math.PI*2);
+      ctx.fillStyle=`rgba(13,13,13,${0.4+rng()*0.5})`; ctx.fill();
+    }
+  }
+}
+function buildTopSyscalls() {
+  const el = document.getElementById("topSyscalls");
+  if(!el) return;
+  el.innerHTML = topSyscallData.map((s,i)=>{
+    const barColor = i===0 ? "var(--hi)" : i<=2 ? "var(--ink-mid)" : "var(--ink-faint)";
+    const valColor = i===0 ? "var(--hi)" : "var(--ink-faint)";
+    const tipText = i===0 ? "Dominant syscall — investigate if unexpected" : "Normal frequency";
+    return `
+    <div class="dd-row" role="listitem" aria-label="${s.name}: ${s.pct}% of calls">
+      <span class="dd-label" title="${s.name}">${s.name}</span>
+      <div class="dd-bar" title="${s.pct}% of all syscalls in this run">
+        <div class="dd-bar-fill" style="width:${s.pct}%;background:${barColor}"></div>
+      </div>
+      <span class="dd-val" style="color:${valColor}">${s.pct}%</span>
+    </div>`;
+  }).join("");
+}
+
+/* ═══════════════════════════════════════════════
+   CHART HELPERS
+   ═══════════════════════════════════════════════ */
+function activityChart(){
+  return `<svg viewBox="0 0 700 200" width="100%" height="200" style="display:block" role="img" aria-label="Syscall volume over recent sessions — peak on Thursday">
+    <defs>
+      <pattern id="htpat" patternUnits="userSpaceOnUse" width="5" height="5">
+        <circle cx="2.5" cy="2.5" r="0.8" fill="#ccc9c2"/>
+      </pattern>
+    </defs>
+    ${[40,80,120,160].map(y=>`<line x1="40" y1="${y}" x2="680" y2="${y}" stroke="#e0ddd8" stroke-width="0.5" stroke-dasharray="3,3"/>`).join("")}
+    ${[40,160,280,400,520,640].map(x=>`<line x1="${x}" y1="20" x2="${x}" y2="178" stroke="#e0ddd8" stroke-width="0.5"/>`).join("")}
+    <path d="M40 160 C110 145 130 108 190 118 S280 68 340 80 S430 28 510 52 S590 118 650 72 L650 178 L40 178 Z" fill="url(#htpat)"/>
+    <path d="M40 160 C110 145 130 108 190 118 S280 68 340 80 S430 28 510 52 S590 118 650 72" fill="none" stroke="#1a3a6e" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="510" cy="52" r="4" fill="#1a3a6e"/>
+    <circle cx="510" cy="52" r="8" fill="none" stroke="#1a3a6e" stroke-width="1" opacity="0.4"/>
+    <!-- Peak annotation -->
+    <text x="518" y="46" font-family="IBM Plex Mono,monospace" font-size="8" fill="#1a3a6e" letter-spacing="0.05em">peak: 1284</text>
+    ${["Mon","Tue","Wed","Thu","Fri","Sat"].map((d,i)=>`<text x="${40+i*122}" y="195" font-family="IBM Plex Mono,monospace" font-size="9" fill="#999" letter-spacing="0.05em">${d}</text>`).join("")}
+    ${["0","512","1024","1536"].map((v,i)=>`<text x="2" y="${162-i*40}" font-family="IBM Plex Mono,monospace" font-size="8" fill="#bbb">${v}</text>`).join("")}
+    <!-- Y axis label -->
+    <text x="-80" y="12" font-family="IBM Plex Mono,monospace" font-size="8" fill="#bbb" transform="rotate(-90 40 100)" letter-spacing="0.05em">syscalls</text>
+  </svg>`;
+}
+
+function barChart(data, accent=false){
+  const maxV=Math.max(...data.map(d=>d.v));
+  const W=280, H=140, bars=data.length, bw=Math.floor(W/bars*0.55), gap=Math.floor(W/bars);
+  let svg=`<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="display:block">`;
+  svg+=`<defs><pattern id="bp${accent?'a':'b'}" patternUnits="userSpaceOnUse" width="4" height="4"><circle cx="2" cy="2" r="0.7" fill="#ccc9c2"/></pattern></defs>`;
+  svg+=`<rect width="${W}" height="${H}" fill="url(#bp${accent?'a':'b'})" opacity="0.5"/>`;
+  data.forEach((d,i)=>{
+    const h=Math.floor((d.v/maxV)*(H-30));
+    const x=i*gap+gap*0.22, y=H-h-20;
+    const fill=accent?"#1a3a6e":"#0d0d0d";
+    const op=0.3+i*(0.7/bars);
+    svg+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="${fill}" opacity="${op}"><title>${d.l}: ${d.v} calls</title></rect>`;
+    svg+=`<text x="${x+bw/2}" y="${H-4}" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#999">${d.l}</text>`;
+  });
+  svg+=`</svg>`;
+  return svg;
+}
+
+function donutChart(pct, label="MEMORY"){
+  const r=52,cx=80,cy=72,circ=2*Math.PI*r;
+  const dash=circ*pct/100;
+  return `<svg viewBox="0 0 160 144" width="100%" height="144" style="display:block" role="img" aria-label="${label}: ${pct}% of syscalls">
+    <defs><pattern id="dp" patternUnits="userSpaceOnUse" width="4" height="4"><circle cx="2" cy="2" r="0.7" fill="#ccc9c2"/></pattern></defs>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="url(#dp)" stroke-width="20"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#1a3a6e" stroke-width="20" stroke-dasharray="${dash} ${circ}" stroke-linecap="butt" transform="rotate(-90 ${cx} ${cy})"/>
+    <text x="${cx}" y="${cy-6}" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="22" font-weight="600" fill="#0d0d0d">${pct}%</text>
+    <text x="${cx}" y="${cy+14}" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="9" fill="#999" letter-spacing="0.1em">${label}</text>
+  </svg>`;
+}
+
+function latencyCircles(){
+  const rng=mulberry32(99);
+  let svg=`<svg viewBox="0 0 220 130" width="100%" height="130" style="display:block" role="img" aria-label="Syscall volume comparison across programs — circle area proportional to call count">`;
+  const pts=[
+    {x:45,y:65,v:184,label:"ls"},
+    {x:100,y:42,v:642,label:"find"},
+    {x:158,y:72,v:928,label:"curl"},
+    {x:82,y:95,v:1284,label:"py3"}
+  ];
+  pts.forEach(p=>{
+    const r=Math.sqrt(p.v/1284)*34;
+    svg+=`<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="none" stroke="#1a3a6e" stroke-width="1" opacity="0.6"><title>${p.label}: ${p.v} syscalls</title></circle>`;
+    svg+=`<circle cx="${p.x}" cy="${p.y}" r="${r*0.55}" fill="#1a3a6e" opacity="0.12"/>`;
+    svg+=`<circle cx="${p.x}" cy="${p.y}" r="2" fill="#0d0d0d"/>`;
+    svg+=`<text x="${p.x}" y="${p.y-r-4}" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#999">${p.label}</text>`;
+  });
+  for(let i=0;i<60;i++){
+    const x=rng()*220,y=rng()*130;
+    svg+=`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(rng()*0.7).toFixed(1)}" fill="#bbb" opacity="0.4"/>`;
+  }
+  svg+=`</svg>`;
+  return svg;
+}
+
+/* ═══════════════════════════════════════════════
+   RENDER FUNCTIONS
+   ═══════════════════════════════════════════════ */
+const root = document.getElementById("viewRoot");
+
+function renderDashboard(){
+  setActive("dashboard");
+  document.getElementById("pageTitle").innerHTML = "Syscall <em>Control</em>";
+  document.getElementById("pageSubtitle").textContent = "All profiled programs, recent runs, and tracing overhead at a glance.";
+  document.getElementById("pageStamp").textContent = "Fig. 1 — Overview Dashboard";
+
+  const runs = STATE.runs, programs = STATE.programs;
+  if(loadError){ root.innerHTML = ERROR_HTML; return; }
+  if(!runs.length){ root.innerHTML = EMPTY_RUNS_HTML; return; }
+
+  // ---- real metrics ----
+  const latest = runs[0]; // /api/runs is newest-first
+  const peak = runs.slice().sort((a,b)=>b.syscalls-a.syscalls)[0];
+  const withBench = runs.filter(r=>r.overhead_x!==null);
+  const highestOv = withBench.slice().sort((a,b)=>b.overhead_x-a.overhead_x)[0] || null;
+  const mostProfiled = programs.slice().sort((a,b)=>b.runs-a.runs)[0] || null;
+  const benchCount = runs.filter(r=>r.artifacts && r.artifacts.benchmark).length;
+  const incomplete = runs.filter(r=>r.status!=="OK");
+
+  // per-run syscall volume (real) for the chart
+  const volData = runs.slice().reverse().map(r=>({l:(r.program||"").slice(0,5), v:r.syscalls}));
+
+  root.innerHTML=`
+    ${incomplete.length ? `
+    <div class="notice-banner" role="status">
+      <span style="color:var(--warn);margin-right:8px">\u25c8</span>
+      <div class="notice-banner-text">
+        <strong>${incomplete.length} run${incomplete.length>1?'s':''} not fully processed.</strong>
+        <span> These are profiled but not yet visualized. Run <span style="font-family:var(--mono)">python3 visualize.py &lt;run-dir&gt;</span> to generate charts &amp; summary.</span>
+      </div>
+    </div>` : ''}
+
+    <div class="metrics-row" style="grid-template-columns:repeat(3,1fr)">
+      <div class="metric-cell" title="Total individual profiling sessions recorded">
+        <div class="metric-cell-label">Total Profiling Runs</div>
+        <div class="metric-cell-helper">Each run = one ptrace session</div>
+        <div class="metric-cell-value" style="color:var(--hi)">${runs.length}</div>
+        <div class="metric-cell-note">indexed in runs_index.json</div>
+      </div>
+      <div class="metric-cell clickable" onclick="render('programs')" title="Browse all programs">
+        <div class="metric-cell-label">Programs Traced</div>
+        <div class="metric-cell-helper">Unique binaries with at least one run</div>
+        <div class="metric-cell-value" style="color:var(--hi)">${programs.length}</div>
+        <div class="metric-cell-note">${esc(programs.map(p=>p.name).join(", "))||"\u2014"}</div>
+      </div>
+      <div class="metric-cell clickable" onclick="openRun('${latest.run_id}')" title="Open the latest run">
+        <div class="metric-cell-label">Latest Run</div>
+        <div class="metric-cell-helper">Most recent profiling session</div>
+        <div class="metric-cell-value" style="color:var(--hi);font-size:20px">${esc(latest.program)}</div>
+        <div class="metric-cell-note">${esc(latest.timestamp)}</div>
+      </div>
+      <div class="metric-cell clickable" onclick="openRun('${peak.run_id}')" title="Open the run with the most syscalls">
+        <div class="metric-cell-label">Highest Syscall Count</div>
+        <div class="metric-cell-helper">Run that intercepted the most events</div>
+        <div class="metric-cell-value" style="color:var(--hi)">${peak.syscalls.toLocaleString()}</div>
+        <div class="metric-cell-note">${esc(peak.program)} \u00b7 ${esc(peak.timestamp)}</div>
+      </div>
+      <div class="metric-cell ${highestOv?'clickable':''}" ${highestOv?`onclick="openRun('${highestOv.run_id}')"`:''} title="Largest measured tracing overhead">
+        <div class="metric-cell-label">Highest Overhead</div>
+        <div class="metric-cell-helper">Traced \u00f7 normal runtime (benchmarked runs)</div>
+        <div class="metric-cell-value">${highestOv?overheadColor(fmtOverhead(highestOv.overhead_x)):'<span style="color:var(--ink-faint)">\u2014</span>'}</div>
+        <div class="metric-cell-note">${highestOv?esc(highestOv.program):'no benchmarks yet'}</div>
+      </div>
+      <div class="metric-cell clickable" onclick="render('programs')" title="Program with the most runs">
+        <div class="metric-cell-label">Most Profiled Program</div>
+        <div class="metric-cell-helper">Binary with the most recorded runs</div>
+        <div class="metric-cell-value" style="color:var(--hi);font-size:20px">${mostProfiled?esc(mostProfiled.name):'\u2014'}</div>
+        <div class="metric-cell-note">${mostProfiled?mostProfiled.runs+' run'+(mostProfiled.runs>1?'s':''):''} \u00b7 ${benchCount} benchmark${benchCount===1?'':'s'}</div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="panel">
+        <div class="panel-title">Syscall Volume by Run<span class="panel-title-aux">total calls per session</span></div>
+        <p style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:12px;font-style:italic">
+          Each bar = one profiling session. Taller = more syscalls intercepted.
+        </p>
+        <div class="chart-wrap">${barChart(volData, true)}</div>
+        <p class="fig-caption">Fig. 3 — Per-run syscall counts (oldest \u2192 newest)</p>
+      </div>
+      <div class="panel">
+        <div class="panel-title">Recent Runs<span class="panel-title-aux">newest first</span></div>
+        <p style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:14px;font-style:italic">Click a row to open run detail.</p>
+        <div class="timeline">
+          ${runs.slice(0,6).map(r=>`
+            <div class="timeline-row" onclick="openRun('${r.run_id}')" style="cursor:pointer" title="Open ${esc(r.program)} / ${esc(r.timestamp)}">
+              <span class="tl-time">${esc((r.timestamp||'').slice(11,16))}</span>
+              <div class="tl-body"><strong>${esc(r.program)} \u00b7 ${r.syscalls.toLocaleString()} syscalls</strong><span>${esc(r.timestamp)} \u00b7 ${statusPill(r.status)}</span></div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:28px">
+      <div class="panel-title">All Profiling Runs — click any row to inspect<span class="panel-title-aux">results/ \u00b7 Tab. 1</span></div>
+      <p style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:14px;font-style:italic">
+        Each row is one ptrace session. Result = artifact completeness (OK once profiled and visualized).
+      </p>
+      <table class="print-table">
+        <thead>
+          <tr><th>Program</th><th>Timestamp</th><th>Total Calls</th><th>Distinct</th><th>Overhead \u00d7</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          ${sortRuns(runs).map(r=>`
+            <tr class="clickable" onclick="openRun('${r.run_id}')" title="Open detail for ${esc(r.program)} / ${esc(r.timestamp)}">
+              <td>${esc(r.program)}</td>
+              <td>${esc(r.timestamp)}</td>
+              <td style="color:var(--hi);font-weight:500">${r.syscalls.toLocaleString()}</td>
+              <td>${r.unique}</td>
+              <td>${r.overhead_x!==null?overheadColor(r.benchmark):'<span style="color:var(--ink-faint)">\u2014</span>'}</td>
+              <td>${statusPill(r.status)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderPrograms(){
+  setActive("programs");
+  document.getElementById("pageTitle").innerHTML="Traced <em>Programs</em>";
+  document.getElementById("pageSubtitle").textContent="All binaries that have been profiled. Click a program to view its run history.";
+  document.getElementById("pageStamp").textContent="Tab. 2 — Program Index";
+
+  const programs = STATE.programs;
+  if(!programs.length){ root.innerHTML = EMPTY_RUNS_HTML; return; }
+
+  const incomplete = programs.filter(p=>p.status!=="OK");
+
+  root.innerHTML=`
+    ${incomplete.length ? `
+    <div class="notice-banner" role="status">
+      <span style="color:var(--warn);margin-right:8px">\u25c8</span>
+      <div class="notice-banner-text">
+        <strong>${incomplete.length} program${incomplete.length>1?'s':''} with incomplete artifacts:</strong>
+        <span> ${esc(incomplete.map(p=>p.name).join(", "))} — latest run is profiled but not visualized yet.</span>
+      </div>
+    </div>` : ''}
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div class="toolbar">
+        <button class="tool-btn active" data-filter="all">All (${programs.length})</button>
+        <button class="tool-btn" data-filter="ok">OK (${programs.filter(p=>p.status==='OK').length})</button>
+        <button class="tool-btn" data-filter="incomplete">Incomplete (${incomplete.length})</button>
+      </div>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">Click any program card to view its run history \u2192</span>
+    </div>
+
+    <div class="program-grid" id="progGrid">
+      ${programs.map(p=>`
+        <div class="program-cell" data-id="${esc(p.id)}" data-status="${p.status==='OK'?'ok':'incomplete'}" role="button" tabindex="0"
+             aria-label="${esc(p.name)}: ${p.runs} runs, click to view run history"
+             title="Click to view run history for ${esc(p.name)}">
+          <div class="prog-status">${statusPill(p.status)}</div>
+          <div class="prog-icon" aria-hidden="true">${esc(p.name.slice(0,2).toUpperCase())}</div>
+          <div class="prog-name">${esc(p.name)}</div>
+          <div class="prog-meta">
+            <div><span title="Number of ptrace sessions for this binary">${p.runs} run${p.runs===1?'':'s'}</span></div>
+            <div>Last run: ${esc(p.latest)}</div>
+            <div>Latest overhead: ${p.overhead_x!==null?overheadColor(p.overhead):'<span style="color:var(--ink-faint)">\u2014</span>'}</div>
+            <div>Most frequent syscall: <strong>${esc(p.top)}</strong></div>
+            <div>Dominant behavior: <em>${esc(p.category)}</em></div>
+          </div>
+          <div class="program-cell-cta">View ${p.runs} run${p.runs===1?'':'s'} \u2192</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+
+  document.querySelectorAll(".program-cell").forEach(cell=>{
+    const activate = () => openProgram(cell.dataset.id);
+    cell.addEventListener("click", activate);
+    cell.addEventListener("keydown", e=>{ if(e.key==="Enter"||e.key===" ") activate(); });
+  });
+
+  document.querySelectorAll(".tool-btn[data-filter]").forEach(btn=>{
+    btn.addEventListener("click", function(){
+      document.querySelectorAll(".tool-btn[data-filter]").forEach(b=>b.classList.remove("active"));
+      this.classList.add("active");
+      const filter = this.dataset.filter;
+      document.querySelectorAll(".program-cell").forEach(cell=>{
+        const show = filter==="all" || cell.dataset.status===filter;
+        cell.style.display = show ? "" : "none";
+      });
+    });
+  });
+}
+
+function renderProgramDetail(prog){
+  setActive("programs");
+  document.getElementById("pageTitle").innerHTML=`<em>${esc(prog.name)}</em>`;
+  document.getElementById("pageSubtitle").textContent=`Profiling history for ${prog.name} — all runs stored in results/${prog.id}/`;
+  document.getElementById("pageStamp").textContent=`Tab. 3 — ${prog.name} History`;
+
+  const localRuns = STATE.runs.filter(r=>r.program===prog.id || r.program===prog.name);
+  const benched = localRuns.filter(r=>r.overhead_x!==null);
+  const avgOverhead = benched.length ? (benched.reduce((s,r)=>s+r.overhead_x,0)/benched.length).toFixed(2)+"\u00d7" : "\u2014";
+  const maxSyscalls = localRuns.length ? Math.max(...localRuns.map(r=>r.syscalls)) : 0;
+
+  root.innerHTML=`
+    <div class="breadcrumb" aria-label="Navigation breadcrumb">
+      <a onclick="render('programs')" title="Back to all programs">Programs</a>
+      <span class="breadcrumb-sep">\u203a</span>
+      <span>${esc(prog.name)}</span>
+    </div>
+
+    <div class="prog-stat-bar" role="region" aria-label="${esc(prog.name)} summary statistics">
+      <div class="prog-stat-cell">
+        <div class="prog-stat-label">Total Runs</div>
+        <div class="prog-stat-val" style="color:var(--hi)">${localRuns.length}</div>
+      </div>
+      <div class="prog-stat-cell">
+        <div class="prog-stat-label">Avg Overhead</div>
+        <div class="prog-stat-val">${benched.length?overheadColor(avgOverhead):'<span style="color:var(--ink-faint);font-size:14px">no benchmarks</span>'}</div>
+      </div>
+      <div class="prog-stat-cell">
+        <div class="prog-stat-label">Peak Syscall Count</div>
+        <div class="prog-stat-val" style="color:var(--hi)">${maxSyscalls.toLocaleString()}</div>
+      </div>
+      <div class="prog-stat-cell">
+        <div class="prog-stat-label">Dominant Behavior</div>
+        <div class="prog-stat-val" style="font-size:14px;font-style:italic">${esc(prog.category)}</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Run History — click any row to open run detail<span class="panel-title-aux">Tab. 3 \u00b7 results/${esc(prog.id)}/</span></div>
+      <p style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:14px;font-style:italic">
+        Each row is one ptrace session for this program. Overhead = traced \u00f7 normal runtime (when benchmarked).
+      </p>
+      <table class="print-table">
+        <thead>
+          <tr><th>Timestamp</th><th>Total Calls</th><th>Distinct</th><th>Overhead \u00d7</th><th>Result</th></tr>
+        </thead>
+        <tbody>
+          ${localRuns.map(r=>`
+            <tr class="clickable" onclick="openRun('${r.run_id}')" title="Open detail for ${esc(r.timestamp)}">
+              <td>${esc(r.timestamp)}</td>
+              <td style="color:var(--hi);font-weight:500">${r.syscalls.toLocaleString()}</td>
+              <td>${r.unique}</td>
+              <td>${r.overhead_x!==null?overheadColor(r.benchmark):'<span style="color:var(--ink-faint)">\u2014</span>'}</td>
+              <td>${statusPill(r.status)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function renderRunDetail(id){
+  setActive("runs");
+  const run = runById(id) || STATE.runs[0];
+  if(!run){ root.innerHTML = EMPTY_RUNS_HTML; return; }
+
+  document.getElementById("pageTitle").innerHTML=`Run <em>Detail</em>`;
+  document.getElementById("pageSubtitle").textContent=`${run.program} — session captured at ${run.timestamp}`;
+  document.getElementById("pageStamp").textContent=`Fig. 4 — Run Analysis`;
+
+  const a = run.artifacts || {};
+  const ovText = run.overhead_x!==null ? fmtOverhead(run.overhead_x) : "\u2014";
+
+  // ---- skeleton (synchronous), with slots filled in asynchronously ----
+  root.innerHTML=`
+    <div class="breadcrumb" aria-label="Navigation breadcrumb">
+      <a onclick="render('dashboard')">Dashboard</a>
+      <span class="breadcrumb-sep">\u203a</span>
+      <a onclick="render('programs')">Programs</a>
+      <span class="breadcrumb-sep">\u203a</span>
+      <a onclick="openProgram('${esc(run.program)}')">${esc(run.program)}</a>
+      <span class="breadcrumb-sep">\u203a</span>
+      <span>${esc(run.timestamp)}</span>
+    </div>
+
+    <!-- identity + artifact availability -->
+    <div class="run-overhead-row" role="region" aria-label="Run identity">
+      <div>
+        <div style="font-size:9px;letter-spacing:0.15em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:4px">Run ID</div>
+        <div class="overhead-val" style="color:var(--hi);font-size:18px">${esc(run.run_id)}</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--ink-light);margin-top:6px">${esc(run.path)}</div>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        ${artifactPill("profile", !!a.profile)}
+        ${artifactPill("benchmark", !!a.benchmark)}
+        ${artifactPill("summary", !!a.summary)}
+        ${artifactPill("visualization", !!a.visualization)}
+      </div>
+    </div>
+
+    <!-- METRICS -->
+    <div class="metrics-row" style="grid-template-columns:repeat(4,1fr);margin-bottom:28px">
+      <div class="metric-cell">
+        <div class="metric-cell-label">Total Syscalls</div>
+        <div class="metric-cell-helper">Events intercepted by ptrace this session</div>
+        <div class="metric-cell-value"><span style="color:var(--hi)">${run.syscalls.toLocaleString()}</span></div>
+        <div class="metric-cell-note">captured events</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-cell-label">Distinct Syscall Types</div>
+        <div class="metric-cell-helper">How many different syscalls were called</div>
+        <div class="metric-cell-value">${run.unique}</div>
+        <div class="metric-cell-note">of ~300 possible on x86_64</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-cell-label">Most-Called Syscall</div>
+        <div class="metric-cell-helper">The single syscall called most frequently</div>
+        <div class="metric-cell-value" style="font-size:16px;color:var(--accent-mid);font-style:italic">${esc(run.top)}</div>
+        <div class="metric-cell-note">dominant call</div>
+      </div>
+      <div class="metric-cell">
+        <div class="metric-cell-label">Behavior Category</div>
+        <div class="metric-cell-helper">What this program primarily does at the OS level</div>
+        <div class="metric-cell-value" style="font-size:16px">${esc(run.category)}</div>
+        <div class="metric-cell-note">dominant behavior</div>
+      </div>
+    </div>
+
+    <!-- BEHAVIOR SUMMARY (from summary.txt) -->
+    <div class="panel" style="margin-bottom:28px">
+      <div class="panel-title">Automated Behavior Summary<span class="panel-title-aux">summary.txt</span></div>
+      <div class="summary-text" id="rd-summary">Loading summary\u2026</div>
+    </div>
+
+    <!-- BENCHMARK (from benchmark.json) -->
+    <div class="panel" style="margin-bottom:28px">
+      <div class="panel-title">Benchmark<span class="panel-title-aux">benchmark.json</span></div>
+      <div id="rd-bench">Loading benchmark\u2026</div>
+    </div>
+
+    <!-- CHARTS (from profile.json) -->
+    <div class="chart-grid">
+      <div class="chart-cell">
+        <div class="chart-cell-title">Top Syscalls by Call Count</div>
+        <div class="chart-cell-desc">Which syscalls were called most often — tallest bar = most frequent</div>
+        <div id="rd-topbar">Loading\u2026</div>
+        <p class="fig-caption">Fig. 5a — Top calls \u00b7 ${esc(run.program)}</p>
+      </div>
+      <div class="chart-cell">
+        <div class="chart-cell-title">Category Share</div>
+        <div class="chart-cell-desc">What fraction of all calls belong to the dominant category</div>
+        <div id="rd-donut">Loading\u2026</div>
+        <p class="fig-caption" id="rd-donut-cap">Fig. 5b — dominant category share</p>
+      </div>
+    </div>
+
+    <!-- VISUALIZATION (syscall_report.png) -->
+    <div class="panel" style="margin-top:28px">
+      <div class="panel-title">Generated Report Image<span class="panel-title-aux">syscall_report.png</span></div>
+      <div id="rd-viz">Loading\u2026</div>
+    </div>
+
+    <div style="margin-top:16px;text-align:right">
+      <button class="back-btn" onclick="render('benchmarks')">View full benchmark report \u2192</button>
+    </div>
+  `;
+
+  // ---- async fills ----
+  // summary.txt
+  API.summary(run.run_id).then(txt=>{
+    const el=document.getElementById("rd-summary"); if(!el) return;
+    el.textContent = txt && txt.trim() ? txt : "No summary yet. Run python3 visualize.py on this run directory to generate summary.txt.";
+    if(!(txt && txt.trim())) el.style.color="var(--ink-faint)";
+  });
+
+  // benchmark.json
+  API.benchmark(run.run_id).then(b=>{
+    const el=document.getElementById("rd-bench"); if(!el) return;
+    if(!b){ el.innerHTML=`<p style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">No benchmark for this run. Generate one with <span style="color:var(--accent)">./profiler --benchmark-run ${esc(run.path)}/</span></p>`; return; }
+    const cmp=[{l:"normal",v:Number(b.untraced_ms)||0},{l:"traced",v:Number(b.traced_ms)||0}];
+    el.innerHTML=`
+      <div class="metrics-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">
+        <div class="metric-cell"><div class="metric-cell-label">Normal (untraced)</div><div class="metric-cell-value" style="font-size:18px">${(Number(b.untraced_ms)||0).toFixed(3)} ms</div></div>
+        <div class="metric-cell"><div class="metric-cell-label">Traced (ptrace)</div><div class="metric-cell-value" style="font-size:18px;color:var(--hi)">${(Number(b.traced_ms)||0).toFixed(3)} ms</div></div>
+        <div class="metric-cell"><div class="metric-cell-label">Overhead</div><div class="metric-cell-value" style="font-size:18px">${overheadColor(fmtOverhead(b.overhead_x))}</div><div class="metric-cell-note">+${b.overhead_pct}% slower</div></div>
+      </div>
+      <div class="chart-wrap" style="max-width:320px">${barChart(cmp, true)}</div>`;
+  });
+
+  // profile.json -> top syscalls bar + category donut
+  API.profile(run.run_id).then(prof=>{
+    const bar=document.getElementById("rd-topbar"), don=document.getElementById("rd-donut"), cap=document.getElementById("rd-donut-cap");
+    if(!prof || !prof.syscalls || !prof.syscalls.length){
+      if(bar) bar.innerHTML=`<p style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">profile.json not available.</p>`;
+      if(don) don.innerHTML="";
+      return;
+    }
+    const sorted=prof.syscalls.slice().sort((x,y)=>(y.count||0)-(x.count||0));
+    const total=prof.syscalls.reduce((s,x)=>s+(x.count||0),0)||1;
+    if(bar) bar.innerHTML=barChart(sorted.slice(0,7).map(s=>({l:(s.name||"").slice(0,6),v:s.count||0})), true);
+    // dominant category %
+    const byCat={}; prof.syscalls.forEach(s=>{const c=(s.category||"").trim(); byCat[c]=(byCat[c]||0)+(s.count||0);});
+    const topCat=Object.keys(byCat).sort((p,q)=>byCat[q]-byCat[p])[0]||"";
+    const pct=Math.round((byCat[topCat]||0)/total*100);
+    const label=(run.category||topCat||"").toUpperCase();
+    if(don) don.innerHTML=donutChart(pct, label);
+    if(cap) cap.textContent=`Fig. 5b — ${run.category||topCat} as % of total`;
+  });
+
+  // syscall_report.png (only if present)
+  const viz=document.getElementById("rd-viz");
+  if(a.visualization){
+    viz.innerHTML=`<img src="${API.imageURL(run.run_id,'syscall_report.png')}" alt="Generated syscall report for ${esc(run.program)}" style="width:100%;border:1px solid var(--rule);background:#fff" loading="lazy">`;
+  } else {
+    viz.innerHTML=`<p style="font-family:var(--mono);font-size:11px;color:var(--ink-faint);line-height:1.7">
+      No visualization generated yet. Create the charts &amp; summary with:<br>
+      <span style="color:var(--accent)">python3 visualize.py ${esc(run.path)}/</span></p>`;
+  }
+}
+
+function renderBenchmarks(){
+  setActive("benchmarks");
+  document.getElementById("pageTitle").innerHTML="Overhead <em>Benchmarks</em>";
+  document.getElementById("pageSubtitle").textContent="Normal vs traced runtime for every benchmarked run, measured by the profiler itself.";
+  document.getElementById("pageStamp").textContent="Tab. 4 — Benchmark Report";
+
+  const benched = STATE.runs.filter(r=>r.artifacts && r.artifacts.benchmark);
+  if(!benched.length){
+    root.innerHTML=`
+      <div class="panel" style="text-align:center;padding:48px 24px">
+        <div class="panel-title" style="justify-content:center">No benchmarks yet</div>
+        <p style="font-family:var(--mono);font-size:11px;color:var(--ink-light);margin-top:12px;line-height:1.7">
+          Attach a benchmark to an existing run, then refresh:<br><br>
+          <span style="color:var(--accent)">./profiler --benchmark-run results/&lt;program&gt;/&lt;timestamp&gt;/</span>
+        </p>
+      </div>`;
+    return;
+  }
+
+  root.innerHTML=`
+    <p class="section-intro">
+      Each benchmarked run was timed twice: once normally and once under ptrace. The overhead multiplier is traced runtime &divide; normal runtime &mdash; a measured value, reported as-is.
+    </p>
+    <div id="bench-body"><p style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">Loading ${benched.length} benchmark${benched.length>1?'s':''}\u2026</p></div>`;
+
+  Promise.all(benched.map(async r=>({ r, b: await API.benchmark(r.run_id) })))
+  .then(results=>{
+    const rows = results.filter(x=>x.b).map(x=>({
+      id:x.r.run_id, prog:x.r.program, ts:x.r.timestamp,
+      normal:Number(x.b.untraced_ms)||0, traced:Number(x.b.traced_ms)||0,
+      x:Number(x.b.overhead_x)||0, pct:x.b.overhead_pct
+    })).sort((a,b)=>b.x-a.x);
+
+    const body=document.getElementById("bench-body"); if(!body) return;
+    if(!rows.length){ body.innerHTML=`<p style="font-family:var(--mono);font-size:11px;color:var(--ink-faint)">Benchmark files could not be read.</p>`; return; }
+
+    const maxX=Math.max(...rows.map(r=>r.x),1);
+    const highest=rows[0], lowest=rows[rows.length-1];
+    const avgX=(rows.reduce((s,r)=>s+r.x,0)/rows.length);
+
+    body.innerHTML=`
+      <div class="metrics-row" style="grid-template-columns:repeat(3,1fr);margin-bottom:32px">
+        <div class="metric-cell">
+          <div class="metric-cell-label">Benchmarked Runs</div>
+          <div class="metric-cell-helper">Runs with a normal-vs-traced measurement</div>
+          <div class="metric-cell-value" style="color:var(--hi)">${rows.length}</div>
+          <div class="metric-cell-note">of ${STATE.runs.length} total</div>
+        </div>
+        <div class="metric-cell clickable" onclick="openRun('${highest.id}')" title="Open the run with the highest overhead">
+          <div class="metric-cell-label">Highest Overhead</div>
+          <div class="metric-cell-helper">Largest traced \u00f7 normal ratio measured</div>
+          <div class="metric-cell-value">${overheadColor(fmtOverhead(highest.x))}</div>
+          <div class="metric-cell-note">${esc(highest.prog)}</div>
+        </div>
+        <div class="metric-cell clickable" onclick="openRun('${lowest.id}')" title="Open the run with the lowest overhead">
+          <div class="metric-cell-label">Lowest Overhead</div>
+          <div class="metric-cell-helper">Smallest measured ratio \u00b7 avg ${avgX.toFixed(2)}\u00d7</div>
+          <div class="metric-cell-value">${overheadColor(fmtOverhead(lowest.x))}</div>
+          <div class="metric-cell-note">${esc(lowest.prog)}</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">Per-Run Tracing Overhead<span class="panel-title-aux">benchmark.json \u00b7 sorted high \u2192 low</span></div>
+        <p style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:20px;font-style:italic">
+          Bar length = overhead multiplier relative to the largest measured. Click a row to open the run.
+        </p>
+        ${rows.map(r=>`
+          <div class="bench-bar-wrap" style="cursor:pointer" onclick="openRun('${r.id}')" title="Open ${esc(r.prog)} / ${esc(r.ts)}">
+            <div class="bench-bar-label">
+              <span style="border-bottom:1px dotted var(--rule)">${esc(r.prog)} \u00b7 ${esc(r.ts)}</span>
+              <span>${r.normal.toFixed(2)} ms \u2192 ${r.traced.toFixed(2)} ms &nbsp; ${overheadColor(fmtOverhead(r.x))}</span>
+            </div>
+            <div class="bench-track"><div class="bench-fill" style="width:${Math.max(4,Math.round(r.x/maxX*100))}%;background:var(--accent)"></div></div>
+          </div>
+        `).join("")}
+      </div>`;
+  });
+}
+
+function renderComparisons(){
+  setActive("comparisons");
+  document.getElementById("pageTitle").innerHTML="Run <em>Comparisons</em>";
+  document.getElementById("pageSubtitle").textContent="Select two runs to compare syscall behavior and overhead side-by-side.";
+  document.getElementById("pageStamp").textContent="Tab. 5 — Run Comparison";
+
+  const runs = STATE.runs;
+  if(runs.length < 2){
+    root.innerHTML=`
+      <div class="panel" style="text-align:center;padding:48px 24px">
+        <div class="panel-title" style="justify-content:center">Need at least two runs</div>
+        <p style="font-family:var(--mono);font-size:11px;color:var(--ink-light);margin-top:12px;line-height:1.7">
+          Comparison needs two profiling runs. Generate another, then refresh:<br><br>
+          <span style="color:var(--accent)">./profiler &lt;program&gt;</span>
+        </p>
+      </div>`;
+    return;
+  }
+
+  let runA = runs[1], runB = runs[0];
+
+  async function renderCompareContent(){
+    const box=document.getElementById("compare-content"); if(!box) return;
+    const syscallDelta = runB.syscalls - runA.syscalls;
+    const uniqueDelta  = runB.unique - runA.unique;
+    const haveOv = runA.overhead_x!==null && runB.overhead_x!==null;
+    const overheadDelta = haveOv ? (runB.overhead_x - runA.overhead_x) : null;
+    const deltaSpan=(v,suffix="")=> v===0||v===null ? "" :
+      `<span class="compare-delta ${v>0?'worse':'better'}">${v>0?'+':''}${typeof v==='number'&&suffix==='\u00d7'?v.toFixed(2):v}${suffix}</span>`;
+
+    const col=(run, other, isB)=>`
+      <div class="compare-col">
+        <div style="font-family:var(--mono);font-size:9px;letter-spacing:0.15em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:4px">Run ${isB?'B':'A'}</div>
+        <h2>${esc(run.program)}</h2>
+        <div class="run-id">${esc(run.timestamp)} \u00b7 ${esc(run.run_id)}</div>
+        ${[
+          ["Total Syscalls", `<span style="color:var(--hi)">${run.syscalls.toLocaleString()}</span>`, isB?deltaSpan(syscallDelta):""],
+          ["Distinct Types", run.unique, isB?deltaSpan(uniqueDelta):""],
+          ["Behavior Category", esc(run.category), ""],
+          ["Most-Called", `<span style="color:var(--accent-mid);font-style:italic">${esc(run.top)}</span>`, ""],
+          ["Tracing Overhead", run.overhead_x!==null?overheadColor(run.benchmark):'<span style="color:var(--ink-faint)">\u2014</span>', isB&&haveOv?deltaSpan(overheadDelta,"\u00d7"):""],
+          ["Run Result", statusPill(run.status), ""]
+        ].map(r=>`<div class="compare-row"><span class="compare-row-label">${r[0]}</span><span class="compare-row-val">${r[1]} ${r[2]||''}</span></div>`).join("")}
+      </div>`;
+
+    box.innerHTML=`
+      <div class="compare-grid">${col(runA,runB,false)}${col(runB,runA,true)}</div>
+      <div class="panel" style="margin-top:28px">
+        <div class="panel-title">Top Syscalls — Side by Side<span class="panel-title-aux">profile.json \u00b7 top 5 per run</span></div>
+        <p style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:16px;font-style:italic">Bar height = call count. Different dominant syscalls indicate different OS-level behavior.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;padding:8px 0">
+          <div><div style="font-family:var(--mono);font-size:10px;color:var(--ink-light);margin-bottom:8px">${esc(runA.program)} \u00b7 ${esc(runA.timestamp)}</div><div id="cmp-a">Loading\u2026</div></div>
+          <div><div style="font-family:var(--mono);font-size:10px;color:var(--ink-light);margin-bottom:8px">${esc(runB.program)} \u00b7 ${esc(runB.timestamp)}</div><div id="cmp-b">Loading\u2026</div></div>
+        </div>
+        <p class="fig-caption">Fig. 7 — Top-5 syscalls per run (from each run's profile.json)</p>
+      </div>`;
+
+    const fillBars=async (slot, run)=>{
+      const el=document.getElementById(slot); if(!el) return;
+      const prof=await API.profile(run.run_id);
+      if(!prof||!prof.syscalls||!prof.syscalls.length){ el.innerHTML=`<p style="font-family:var(--mono);font-size:10px;color:var(--ink-faint)">profile.json not available.</p>`; return; }
+      const top=prof.syscalls.slice().sort((a,b)=>(b.count||0)-(a.count||0)).slice(0,5).map(s=>({l:(s.name||"").slice(0,6),v:s.count||0}));
+      el.innerHTML=barChart(top, true);
+    };
+    fillBars("cmp-a", runA); fillBars("cmp-b", runB);
+  }
+
+  root.innerHTML=`
+    <div class="compare-selector">
+      <div>
+        <label for="selA">Run A</label><br>
+        <select id="selA">${runs.map((r,i)=>`<option value="${i}" ${i===1?'selected':''}>${esc(r.program)} \u00b7 ${esc(r.timestamp)}</option>`).join("")}</select>
+      </div>
+      <span class="compare-selector-sep" style="margin-top:16px;color:var(--ink-faint)">vs</span>
+      <div>
+        <label for="selB">Run B</label><br>
+        <select id="selB">${runs.map((r,i)=>`<option value="${i}" ${i===0?'selected':''}>${esc(r.program)} \u00b7 ${esc(r.timestamp)}</option>`).join("")}</select>
+      </div>
+      <button class="back-btn" style="margin-top:16px" id="compareBtn">Compare \u2192</button>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:18px;font-style:italic">Delta indicators show how Run B differs from Run A</span>
+    </div>
+    <div id="compare-content"></div>
+  `;
+
+  renderCompareContent();
+  document.getElementById("compareBtn").addEventListener("click", ()=>{
+    runA = runs[parseInt(document.getElementById("selA").value)];
+    runB = runs[parseInt(document.getElementById("selB").value)];
+    renderCompareContent();
+  });
+}
+
+/* ═══════════════════════════════════════════════
+   NAV TRANSITION
+   ═══════════════════════════════════════════════ */
+function navTransition(cb){
+  const canvas = document.getElementById("nav-transition");
+  canvas.style.opacity="1";
+  canvas.width=window.innerWidth; canvas.height=window.innerHeight;
+  const ctx=canvas.getContext("2d");
+  const cx=canvas.width/2, cy=canvas.height/2;
+  const rng=mulberry32(Date.now()&0xffff);
+  const dots=[];
+  for(let i=0;i<60;i++){
+    const a=rng()*Math.PI*2, r=30+rng()*140;
+    dots.push({x:cx+r*Math.cos(a),y:cy+r*Math.sin(a),r:1+rng()*1.5,op:rng()});
+  }
+  let t=0; const total=16;
+  function frame(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    const p=t/total;
+    ctx.save(); ctx.globalAlpha=Math.sin(p*Math.PI)*0.5;
+    ctx.strokeStyle="#0d0d0d"; ctx.lineWidth=3; ctx.lineCap="round";
+    ctx.beginPath(); ctx.arc(cx,cy,36,0,Math.PI*2); ctx.stroke();
+    ctx.lineWidth=3.5;
+    ctx.beginPath(); ctx.moveTo(cx-12,cy-16); ctx.lineTo(cx+4,cy); ctx.lineTo(cx-12,cy+16); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx+8,cy); ctx.lineTo(cx+20,cy); ctx.stroke();
+    ctx.restore();
+    dots.forEach(d=>{
+      ctx.beginPath(); ctx.arc(d.x,d.y,d.r,0,Math.PI*2);
+      ctx.fillStyle=`rgba(13,13,13,${d.op*Math.sin(p*Math.PI)*0.4})`; ctx.fill();
+    });
+    t++;
+    if(t<=total){ requestAnimationFrame(frame); if(t===Math.floor(total/2)) cb(); }
+    else { canvas.style.opacity="0"; }
+  }
+  frame();
+}
+
+/* ═══════════════════════════════════════════════
+   ROUTING
+   ═══════════════════════════════════════════════ */
+let history_stack = [];
+
+function setActive(view){
+  document.querySelectorAll(".nav-btn[data-view]").forEach(b=>{
+    b.classList.toggle("active", b.dataset.view===view);
+  });
+}
+
+function render(view, payload=null){
+  history_stack.push(view);
+  navTransition(()=>{
+    setActive(view);
+    root.innerHTML="";
+    if(view==="dashboard") renderDashboard();
+    else if(view==="programs") renderPrograms();
+    else if(view==="runs") openRun(STATE.runs[0] && STATE.runs[0].run_id);
+    else if(view==="benchmarks") renderBenchmarks();
+    else if(view==="comparisons") renderComparisons();
+  });
+}
+
+document.querySelectorAll(".nav-btn[data-view]").forEach(btn=>{
+  btn.addEventListener("click",()=>render(btn.dataset.view));
+});
+
+document.addEventListener("keydown",e=>{
+  const map={"1":"dashboard","2":"programs","3":"runs","4":"benchmarks","5":"comparisons"};
+  if(map[e.key]) render(map[e.key]);
+  // UX FIX: backspace goes back
+  if(e.key==="Backspace" && history_stack.length>1 && document.activeElement.tagName!=="INPUT"){
+    history_stack.pop();
+    const prev=history_stack[history_stack.length-1];
+    if(prev) render(prev);
+  }
+});
+
+/* ═══════════════════════════════════════════════
+   INIT
+   ═══════════════════════════════════════════════ */
+buildNavLogo();
+buildTopSyscalls();
+drawFreqMap();
+runIntro();
+
+/* Fill the decorative sidebar frequency list from the busiest real run. */
+async function buildSidebarFreq(){
+  const withProfile = STATE.runs.filter(r=>r.artifacts && r.artifacts.profile);
+  if(!withProfile.length){ topSyscallData=[]; return; }
+  const target = withProfile.slice().sort((a,b)=>b.syscalls-a.syscalls)[0];
+  const prof = await API.profile(target.run_id);
+  if(!prof || !prof.syscalls || !prof.syscalls.length){ topSyscallData=[]; return; }
+  const total = prof.syscalls.reduce((s,x)=>s+(x.count||0),0)||1;
+  topSyscallData = prof.syscalls.slice().sort((a,b)=>(b.count||0)-(a.count||0)).slice(0,7)
+    .map(x=>({ name:x.name, pct: Math.round((x.count||0)/total*100) }));
+}
+
+/* Load real data once, then render the dashboard. */
+async function bootstrap(){
+  try {
+    const [rawRuns, rawProgs] = await Promise.all([API.runs(), API.programs()]);
+    STATE.runs = (rawRuns||[]).map(normalizeRun);
+    STATE.programs = (rawProgs||[]).map(normalizeProgram);
+    loadError = false;
+    await buildSidebarFreq();
+  } catch(e){
+    STATE.runs = []; STATE.programs = []; loadError = true;
+    console.error("Failed to load profiler data:", e);
+  }
+  buildTopSyscalls();
+  wireControls();
+  renderDashboard();
+}
+
+setTimeout(()=>{ bootstrap(); }, 100);
+
+</script>
+</body>
+</html>

@@ -35,6 +35,7 @@ It is **not** the final university report — that lives in `report/report.md`.
 14b. [Phase 001 – Run ID System](#14b-phase-001--run-id-system)
 14c. [Phase 002 – Dynamic Artifact Detection](#14c-phase-002--dynamic-artifact-detection)
 14d. [Phase 003 – Run Registry Access Layer](#14d-phase-003--run-registry-access-layer)
+14e. [Phase 004 – Web UI](#14e-phase-004--web-ui)
 15. [Project Structure](#15-project-structure)
 16. [Source File Overview](#16-source-file-overview)
 17. [Design Decisions](#17-design-decisions)
@@ -1260,6 +1261,106 @@ registry_free(&registry);   /* releases the runs array */
 
 ---
 
+## 14e. Phase 004 – Web UI
+
+> A small, **local, read-only** web interface for browsing profiling runs in a
+> browser. It is an additive *consumer* of existing output: it reads
+> `results/runs_index.json` and each run's artifacts and presents them. It does
+> **not** modify any C code, the registry, the JSON/CSV formats, Run ID
+> generation, or anything from Phases 001–003. It can be deleted entirely
+> without affecting the profiler.
+
+### What it is
+
+A single [Flask](https://flask.palletsprojects.com/) app (`webui/app.py`) plus
+one self-contained HTML page (`webui/templates/index.html`). The backend turns
+on-disk profiler output into a small JSON API; the page calls that API and
+renders an editorial-style dashboard. There is no database, no build step, no
+external CDN (fonts are self-hosted for offline use), and no authentication —
+it is meant to run on `127.0.0.1` for local analysis and live demos.
+
+### Quick start
+
+```bash
+cd webui
+pip install -r requirements.txt      # Flask only; separate from the root requirements.txt
+python app.py                        # serves http://127.0.0.1:5000
+```
+
+Then open <http://127.0.0.1:5000>. The UI reads the `results/` directory at the
+project root. To point it elsewhere, set `SYSCALL_RESULTS_DIR`:
+
+```bash
+SYSCALL_RESULTS_DIR=/path/to/results python app.py
+```
+
+If you have no runs yet, the UI shows an empty-state with the commands to make
+one. To generate a few sample runs (and their visualizations) in one step:
+
+```bash
+./webui/generate_demo_data.sh        # run from the project root
+```
+
+### Architecture
+
+```
+browser (index.html, vanilla JS)
+        │  fetch() JSON over HTTP
+        ▼
+Flask app (webui/app.py)  ── read-only ──▶  results/runs_index.json   (Phase 001 registry)
+                                            results/<prog>/<ts>/profile.json
+                                            results/<prog>/<ts>/benchmark.json
+                                            results/<prog>/<ts>/summary.txt
+                                            results/<prog>/<ts>/syscall_report.png
+```
+
+The backend never writes, never shells out to the C tool, and never imports
+`run_registry.c`. It consumes the **same `runs_index.json` contract** the C
+registry writes — so the C side stays the single owner of producing data, and
+the Python side is just one more reader of it (exactly as a future CLI or API
+would be).
+
+### API endpoints
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /` | the single-page UI |
+| `GET /api/runs` | all runs, newest first, each enriched with derived fields + artifacts |
+| `GET /api/run/<run_id>` | one run's metadata + derived fields + artifacts |
+| `GET /api/run/<run_id>/artifacts` | `{profile, benchmark, summary, visualization}` booleans |
+| `GET /api/run/<run_id>/summary` | `summary.txt` (text/plain) |
+| `GET /api/run/<run_id>/benchmark` | `benchmark.json` |
+| `GET /api/run/<run_id>/profile` | `profile.json` |
+| `GET /api/run/<run_id>/image/<name>` | a chart PNG (whitelisted filenames only) |
+| `GET /api/programs` | runs grouped by program (for the Programs page) |
+
+**Derived fields** (computed per request from each run's files, never stored):
+`top_syscall` and `category` come from `profile.json`; `overhead_x` from
+`benchmark.json`; `status` is **artifact-availability only** — `OK` when the run
+has both `profile.json` and `syscall_report.png`, otherwise `INCOMPLETE`.
+`benchmark.json` is optional and never affects status. There is no
+performance-threshold rule anywhere.
+
+### How run selection and images work
+
+Every run is addressed by its **`run_id`** (the Phase 001 identifier). The UI
+links/tables carry `run_id`; clicking one calls the run-detail view, which
+fetches `/api/run/<run_id>/...` for that run. Images are served only through the
+whitelisted `/api/run/<run_id>/image/<name>` route — `<name>` must be one of the
+known chart filenames, which prevents path traversal; the file is streamed from
+that run's directory, or `404` if it has not been generated.
+
+### How future features reuse the registry
+
+Because all access goes through `runs_index.json` and the per-run files, new
+capabilities are thin additions: a new endpoint reads the same files, and a new
+page calls a new endpoint. Nothing about the C profiler or the data formats has
+to change. If the registry format ever evolves, only the readers (the C
+`run_registry.c` and this app's loader) update — the contract between producer
+and consumers stays in one place.
+
+---
+
 ## 15. Project Structure
 
 ```
@@ -1294,6 +1395,14 @@ syscall_profiler/
 ├── requirements.txt        Python dependencies for visualize.py
 ├── Makefile                build rules and the test target
 ├── README.md               this handbook
+├── webui/                  Phase 004 — local read-only web interface
+│   ├── app.py              Flask backend (reads runs_index.json + artifacts)
+│   ├── requirements.txt    Flask (separate from the root requirements)
+│   ├── generate_demo_data.sh   optional: make a few sample runs
+│   ├── templates/
+│   │   └── index.html      single-page UI (self-contained, self-hosted fonts)
+│   └── static/
+│       └── fonts/          self-hosted woff2 (offline; no external CDN)
 └── report/
     └── report.md           the technical development report
 ```
