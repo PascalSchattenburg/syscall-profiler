@@ -948,7 +948,7 @@ int main(int argc, char *argv[])
     CPRINT(COLOR_BOLD, "  Tracing: ");
     for (i = target_start; i < argc; i++) {
         printf("%s%s", argv[i], (i < argc - 1) ? " " : "");
-        /* Build the full command string for the JSON export.
+        // Build the full command string for the JSON export.
         strncat(program_str, argv[i],
                 sizeof(program_str) - strlen(program_str) - 1);
         if (i < argc - 1)
@@ -1040,4 +1040,5 @@ int main(int argc, char *argv[])
         output_export_csv(stats, stats_count, csv_filename);
 
     return EXIT_SUCCESS;
+    
 }

@@ -1,30 +1,19 @@
-# ============================================================
-# Makefile for System Call Profiler & Tracer
-# University OS Project
-#
+
 # Usage:
 #   make          - build the profiler
 #   make clean    - remove build artifacts
 #   make run      - quick test with 'ls'
 #   make test     - run a few quick tests
 #   make help     - show this help
-# ============================================================
 
-# ---- Compiler settings ----
+# Compiler settings 
 CC      = gcc
-
-# Flags explained:
-#   -Wall     : enable all common warnings
-#   -Wextra   : enable extra warnings
-#   -g        : include debug symbols (for gdb)
-#   -std=gnu99  : use C99 standard (for declarations after statements etc.)
-#   -I include : add include/ to the header search path
 CFLAGS  = -Wall -Wextra -g -std=gnu99 -I include
 
-# ---- Target binary ----
+# Target binary 
 TARGET  = profiler
 
-# ---- Source files ----
+#  Source files 
 SRCS    = src/main.c         \
           src/tracer.c       \
           src/profiler.c     \
@@ -36,12 +25,10 @@ SRCS    = src/main.c         \
           src/run_artifacts.c \
           src/run_registry.c
 
-# ---- Object files (same names, in a build/ dir) ----
+
 OBJS    = $(SRCS:.c=.o)
 
-# ============================================================
 # Default target: build the profiler
-# ============================================================
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
@@ -57,11 +44,8 @@ $(TARGET): $(OBJS)
 	@echo "  [CC]  $<"
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# ============================================================
-# Convenience targets
-# ============================================================
 
-# Quick test: trace 'ls'
+
 run: $(TARGET)
 	@echo "=== Running: ./profiler ls ==="
 	./$(TARGET) ls
@@ -98,17 +82,14 @@ test: $(TARGET)
 	@echo ""
 	@echo "All tests passed!"
 
-# ============================================================
 # Clean up
-# ============================================================
 clean:
 	@echo "  Cleaning build artifacts..."
 	rm -f $(OBJS) $(TARGET) profile.csv
 	@echo "  Done."
 
-# ============================================================
 # Help
-# ============================================================
+
 help:
 	@echo ""
 	@echo "  make              - Build the profiler"
@@ -125,5 +106,4 @@ help:
 	@echo "    ./profiler -n -q true"
 	@echo ""
 
-# Declare phony targets (not real files)
 .PHONY: all run run-nocolor run-csv run-find run-cat test clean help
