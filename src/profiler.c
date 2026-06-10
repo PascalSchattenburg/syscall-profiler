@@ -12,29 +12,27 @@
 #include "../include/profiler.h"
 #include "../include/syscall_table.h"
 
-/* ---------------------------------------------------------------
+/*
  * Internal state
- * --------------------------------------------------------------- */
+*/
 
-/* Our flat array of per-syscall statistics */
+/* flat array of per-syscall statistics */
 static syscall_stat_t stats[PROFILER_MAX_ENTRIES];
 
-/* How many unique syscalls we've seen so far */
+/* How many unique syscalls so far */
 static int stats_count = 0;
 
 /* Running total of all syscall invocations */
 static uint64_t total_call_count = 0;
 
-/* ---------------------------------------------------------------
+/* 
  * Internal helpers
- * --------------------------------------------------------------- */
+ */
 
 /*
  * find_or_create_stat()
  *
  * Look up (or create) the stats entry for a given syscall number.
- * Returns a pointer to the syscall_stat_t, or NULL if we've exceeded
- * our maximum capacity .
  */
 static syscall_stat_t *find_or_create_stat(long syscall_num)
 {
@@ -47,9 +45,7 @@ static syscall_stat_t *find_or_create_stat(long syscall_num)
         }
     }
 
-    /* Not found: create a new entry if we have room */
     if (stats_count >= PROFILER_MAX_ENTRIES) {
-        /* This shouldn't happen with 450 slots on current Linux */
         fprintf(stderr, "[profiler] Warning: stats table full, dropping syscall %ld\n",
                 syscall_num);
         return NULL;
@@ -67,9 +63,9 @@ static syscall_stat_t *find_or_create_stat(long syscall_num)
     return &stats[stats_count - 1];
 }
 
-/* ---------------------------------------------------------------
+/* 
  * Public API
- * --------------------------------------------------------------- */
+ */
 
 /*
  * profiler_init()
@@ -89,10 +85,6 @@ void profiler_init(void)
  * Called when we detect a syscall ENTRY (before the kernel handles it).
  * We just save the timestamp; we don't increment call_count yet because
  * the syscall hasn't completed — we wait for the matching exit.
- *
- * Parameters:
- *   syscall_num  - the syscall number (from RAX register)
- *   timestamp_ns - current time in nanoseconds
  */
 void profiler_record_entry(long syscall_num, double timestamp_ns)
 {
@@ -101,7 +93,6 @@ void profiler_record_entry(long syscall_num, double timestamp_ns)
 
     /*
      * Save the entry timestamp.
-     * We'll use it in profiler_record_exit() to compute duration.
      */
     stat->entry_time_ns = timestamp_ns;
     stat->in_progress   = 1;

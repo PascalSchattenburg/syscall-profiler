@@ -1,27 +1,9 @@
 """
-Syscall Profiler — Web UI backend (Phase 004)
+Syscall Profiler — Web UI backend 
 =============================================
 
 A tiny, local, read-only Flask app that turns the profiler's on-disk output
 into a browsable Web UI. It is an additive *consumer* of existing data:
-
-  * It reads results/runs_index.json (the Phase 001 registry) as the source
-    of truth for which runs exist.
-  * For a given run it reads that run's own artifacts (profile.json,
-    benchmark.json, summary.txt, syscall_report.png) directly from the run
-    directory, exactly like Phase 002's dynamic artifact detection.
-
-It NEVER writes to results/, never calls or modifies the C code, and never
-changes any file format. The C profiler, run_registry.c, run_artifacts.c,
-and the registry/JSON formats are all untouched and remain the single owners
-of producing and writing that data.
-
-Run:
-    cd webui
-    pip install -r requirements.txt
-    python app.py
-    # then open http://127.0.0.1:5000
-
 """
 
 import json
@@ -29,9 +11,9 @@ import os
 
 from flask import Flask, jsonify, send_file, abort, render_template
 
-# --------------------------------------------------------------------------
+
 # Paths
-# --------------------------------------------------------------------------
+
 WEBUI_DIR    = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(WEBUI_DIR)
 RESULTS_DIR  = os.environ.get(
@@ -40,7 +22,6 @@ RESULTS_DIR  = os.environ.get(
 )
 REGISTRY_PATH = os.path.join(RESULTS_DIR, "runs_index.json")
 
-# Canonical artifact filenames (must match what the profiler/visualizer write).
 ARTIFACT_PROFILE       = "profile.json"
 ARTIFACT_BENCHMARK     = "benchmark.json"
 ARTIFACT_SUMMARY       = "summary.txt"
@@ -70,9 +51,8 @@ CATEGORY_LABELS = {
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 
-# --------------------------------------------------------------------------
 # Low-level helpers (read-only)
-# --------------------------------------------------------------------------
+
 def _read_json(path):
     """Parse a JSON file, or return None if missing/unreadable/invalid."""
     try:
@@ -179,14 +159,14 @@ def _enrich(entry):
     overhead = _overhead_x(run_dir)
 
     return {
-        # ---- immutable registry metadata (verbatim) ----
+        # registry metadata
         "run_id":          entry.get("run_id"),
         "program":         entry.get("program"),
         "timestamp":       entry.get("timestamp"),
         "path":            entry.get("path"),
         "total_syscalls":  entry.get("total_syscalls"),
         "unique_syscalls": entry.get("unique_syscalls"),
-        # ---- derived / dynamic (never stored) ----
+      
         "top_syscall":     top_syscall,
         "category":        category,
         "overhead_x":      overhead,
@@ -214,9 +194,8 @@ def _find_entry(run_id):
     return None
 
 
-# --------------------------------------------------------------------------
 # Page route
-# --------------------------------------------------------------------------
+
 @app.route("/")
 def index():
     """Serve the single-page UI (added in WP2). Friendly message until then."""
@@ -228,9 +207,9 @@ def index():
             "<p>Try <a href='/api/runs'>/api/runs</a>.</p>")
 
 
-# --------------------------------------------------------------------------
+
 # API
-# --------------------------------------------------------------------------
+
 @app.route("/api/runs")
 def api_runs():
     """All runs, newest first, each enriched with derived fields + artifacts."""

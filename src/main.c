@@ -15,8 +15,8 @@
  *   --only=name[,name]  Show ONLY these syscalls (trace + report)
  *   --exclude=name[,…]  Hide these syscalls (trace + report)
  *   --top=N             Show only top N entries in the final report
- *   --json=<file>       Export full results to JSON file  [NEW P10]
- *   --benchmark         Run overhead analysis mode        [NEW P8]
+ *   --json=<file>       Export full results to JSON file  
+ *   --benchmark         Run overhead analysis mode        
  *
  * EXAMPLES:
  *   ./profiler ls -la
@@ -33,11 +33,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>     /* access(), X_OK */
-#include <time.h>       /* time(), localtime_r() — RESULTS-MGMT-001 */
-#include <sys/stat.h>   /* mkdir()              — RESULTS-MGMT-001 */
+#include <unistd.h>     
+#include <time.h>       
+#include <sys/stat.h>   
 #include <sys/types.h>
-#include <errno.h>      /* errno for mkdir      — RESULTS-MGMT-001 */
+#include <errno.h>      
 
 #include "../include/tracer.h"
 #include "../include/profiler.h"
@@ -45,13 +45,11 @@
 #include "../include/filter.h"
 #include "../include/benchmark.h"
 
-/* ---------------------------------------------------------------
+/* 
  * make_timestamp()
  *
  * Write the current local time into buf as "YYYY-MM-DD_HH-MM-SS".
- * buf should be at least 20 bytes. This format is filesystem-safe
- * (no colons or spaces) and sorts chronologically as plain text.
- * --------------------------------------------------------------- */
+*/
 static void make_timestamp(char *buf, size_t bufsz)
 {
     time_t    now = time(NULL);
@@ -61,11 +59,11 @@ static void make_timestamp(char *buf, size_t bufsz)
     strftime(buf, bufsz, "%Y-%m-%d_%H-%M-%S", &tm_local);
 }
 
-/* ---------------------------------------------------------------
+/*
  * make_run_id()                                    
  *
  * Write a unique run identifier
- * --------------------------------------------------------------- */
+ */
 static void make_run_id(char *buf, size_t bufsz)
 {
     unsigned char bytes[4];
@@ -79,7 +77,7 @@ static void make_run_id(char *buf, size_t bufsz)
     }
 
     if (!got) {
-        /* Fallback: seed once from time + pid, then pull 4 bytes. */
+        
         static int seeded = 0;
         if (!seeded) {
             srand((unsigned)(time(NULL) ^ (getpid() << 16)));
@@ -95,11 +93,11 @@ static void make_run_id(char *buf, size_t bufsz)
              bytes[0], bytes[1], bytes[2], bytes[3]);
 }
 
-/* ---------------------------------------------------------------
+/* 
  * basename_of()
  *
  * Derive a clean program name for use as a directory name.
- * --------------------------------------------------------------- */
+*/
 static void basename_of(const char *program, char *out, size_t outsz)
 {
     const char *slash = strrchr(program, '/');
@@ -112,9 +110,7 @@ static void basename_of(const char *program, char *out, size_t outsz)
     out[outsz - 1] = '\0';
 }
 
-/* Write a single registry object (2-space indented, no trailing
- * newline). Strings are JSON-escaped for " and \ like our other
- * writers. */
+/* Write a single registry object */
 static void registry_write_entry(FILE *f,
                                  const char *run_id, const char *program,
                                  const char *timestamp, const char *path,
@@ -147,9 +143,7 @@ static void registry_write_entry(FILE *f,
     fprintf(f, "  }");
 }
 
-/* Append one entry to <results_dir>/runs_index.json, creating the
- * file (as a JSON array) on first use. The existing file is spliced
- * just before its closing ']' so prior entries are preserved. */
+/* Append one entry to <results_dir>/runs_index.json. */
 static void registry_append(const char *results_dir,
                             const char *run_id, const char *program,
                             const char *timestamp, const char *path,
@@ -170,7 +164,7 @@ static void registry_append(const char *results_dir,
                          "%s.tmp", idx_path) >= sizeof(tmp_path))
         return;
 
-    /* Read the existing registry, if any */
+    /* Read the existing registry */
     rf = fopen(idx_path, "rb");
     if (rf != NULL) {
         fseek(rf, 0, SEEK_END);
@@ -189,8 +183,6 @@ static void registry_append(const char *results_dir,
         fclose(rf);
     }
 
-    /* If a non-empty file exists but has no ']' it is unexpected; do
-     * not clobber it — skip the append and warn instead. */
     rbrk = (old != NULL) ? strrchr(old, ']') : NULL;
     if (old != NULL && rbrk == NULL) {
         fprintf(stderr, "  Warning: %s is malformed; skipping registry update.\n",
@@ -213,19 +205,18 @@ static void registry_append(const char *results_dir,
                              total_syscalls, unique_syscalls);
         fprintf(wf, "\n]\n");
     } else {
-        /* Find last non-whitespace char of the array body (before ']') */
+        /* Find last non-whitespace char of the array body */
         char *e = rbrk - 1;
         while (e >= old && (*e == ' ' || *e == '\t' ||
                             *e == '\n' || *e == '\r'))
             e--;
 
         if (e < old) {
-            /* Degenerate; treat as fresh */
             fprintf(wf, "[\n");
         } else {
-            /* Copy everything up to and including that char */
+            
             fwrite(old, 1, (size_t)(e - old + 1), wf);
-            /* '[' => empty array (just a newline); '}' => add a comma */
+            
             if (*e == '[')
                 fprintf(wf, "\n");
             else
@@ -247,15 +238,15 @@ static void registry_append(const char *results_dir,
     printf("  [REGISTRY] Indexed run in %s\n", idx_path);
 }
 
-/* ---------------------------------------------------------------
+/* 
  * mkdir_recursive()
  *
  * Create a directory and all missing parent directories, like
- * "mkdir -p". Returns 0 on success, -1 on failure.
+ * "mkdir -p".
  *
  * Works by walking the path and creating each prefix in turn.
- * An already-existing directory (EEXIST) is treated as success.
- * --------------------------------------------------------------- */
+ * An already-existing directory is treated as success.
+*/
 static int mkdir_recursive(const char *path)
 {
     char   tmp[1024];
@@ -290,19 +281,13 @@ static int mkdir_recursive(const char *path)
     return 0;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * build_run_dir()
  *
  * Compose the per-run directory path:
  *
  *     <results_dir>/<program>/<timestamp>
- *
- * The program name is cleaned via basename_of(). The result is
- * written into out. Returns 0 on success, -1 if the
- * composed path would not fit in the buffer.
- *
- * Note: this only builds the string; mkdir_recursive() creates it.
- * --------------------------------------------------------------- */
+ */
 static int build_run_dir(const char *results_dir,
                          const char *program,
                          const char *timestamp,
@@ -323,13 +308,13 @@ static int build_run_dir(const char *results_dir,
 }
 
 
-/* ---------------------------------------------------------------
- * make_unique_run_dir()
+/*  
+* make_unique_run_dir()
  *
  * Given a desired run directory path, guarantee uniqueness so that no
  * run ever reuses or overwrites another run's directory — even when two
  * runs start within the same second and therefore share a timestamp.
- * --------------------------------------------------------------- */
+*/
 static int make_unique_run_dir(const char *path, char *out, size_t outsz)
 {
     struct stat st;
@@ -353,12 +338,12 @@ static int make_unique_run_dir(const char *path, char *out, size_t outsz)
     return -1;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * read_json_string_field()                            
  *
  * Extract the value of a top-level string field <key> from a small
  * JSON file (profile.json). 
- * --------------------------------------------------------------- */
+*/
 static int read_json_string_field(const char *json_path, const char *key,
                                   char *out, size_t outsz)
 {
@@ -377,7 +362,7 @@ static int read_json_string_field(const char *json_path, const char *key,
     if (f == NULL)
         return -1;
 
-    /* Read the whole file into memory (profile.json is small) */
+    /* Read the whole file into memory */
     fseek(f, 0, SEEK_END);
     size = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -420,31 +405,31 @@ static int read_json_string_field(const char *json_path, const char *key,
     return 0;
 }
 
-/* ---------------------------------------------------------------
+/*  
  * read_program_from_json()
  *
  * Thin wrapper around read_json_string_field() for the "program"
  * field, preserving the original interface and return codes.
- * --------------------------------------------------------------- */
+*/
 static int read_program_from_json(const char *json_path,
                                   char *out, size_t outsz)
 {
     return read_json_string_field(json_path, "program", out, outsz);
 }
 
-/* ---------------------------------------------------------------
+/* 
  * parse_command_string()
  *
  * Split a command string into an argv-style array, honoring single
  * and double quotes so that arguments containing spaces are kept
  * together. Backslash escapes the next character.
- * --------------------------------------------------------------- */
+*/
 static int parse_command_string(const char *cmd,
                                 char *out_argv[], int max_args,
                                 char *store, size_t store_sz)
 {
     int    argc_out = 0;
-    size_t si       = 0;        /* index into store              */
+    size_t si       = 0;        /* index into store */
     const char *p   = cmd;
 
     while (*p != '\0') {
@@ -491,12 +476,12 @@ static int parse_command_string(const char *cmd,
 }
 
 
-/* ---------------------------------------------------------------
+/* 
  * executable_exists()
  *
  * check whether the target program can be found and
  * executed BEFORE we print any banner or start tracing.
- * --------------------------------------------------------------- */
+*/
 static int executable_exists(const char *prog)
 {
     /* Case 1: explicit path (absolute or relative) */
@@ -526,20 +511,20 @@ static int executable_exists(const char *prog)
     return 0;
 }
 
-/* ---------------------------------------------------------------
+/*
  * derive_timestamp_from_dir()                    
  *
  * Legacy fallback for --benchmark-run: when an old profile.json has
  * no "timestamp" field, recover it from the run directory's own name,
  * which our layout already encodes as the last path component:
- * --------------------------------------------------------------- */
+*/
 static int derive_timestamp_from_dir(const char *run_dir,
                                      char *out, size_t outsz)
 {
     char        base[256];
     const char *p;
     size_t      i;
-    /* Digit positions in "YYYY-MM-DD_HH-MM-SS" (others are separators) */
+    /* Digit positions in "YYYY-MM-DD_HH-MM-SS" */
     static const int digit_pos[] = {0,1,2,3,5,6,8,9,11,12,14,15,17,18};
 
     /* Strip any trailing '/', then take the final path component */
@@ -571,7 +556,7 @@ static int derive_timestamp_from_dir(const char *run_dir,
     return 0;
 }
 
-/* ---------------------------------------------------------------
+/*
  * run_benchmark_for_dir()   
  *
  * Attach a benchmark to an EXISTING profiling run directory.
@@ -585,16 +570,16 @@ static int derive_timestamp_from_dir(const char *run_dir,
  *
  * No new timestamp directory is created; profile.json and
  * results.csv are never touched.
- * --------------------------------------------------------------- */
+ */
 static int run_benchmark_for_dir(const char *run_dir)
 {
     struct stat st;
     char        json_path[1100];
     char        bench_path[1100];
     char        program[512];
-    char        run_id[16]     = "";   /* PHASE-001: inherited or recovered */
-    char        timestamp[32]  = "";   /* PHASE-001: inherited or recovered */
-    int         reconstructed  = 0;    /* did we have to rebuild metadata?  */
+    char        run_id[16]     = "";   
+    char        timestamp[32]  = "";   
+    int         reconstructed  = 0;    
     char        store[1024];
     char       *cmd_argv[128];
     int         cmd_argc;
@@ -642,7 +627,7 @@ static int run_benchmark_for_dir(const char *run_dir)
     if (read_json_string_field(json_path, "timestamp",
                                timestamp, sizeof(timestamp)) != 0 || timestamp[0] == '\0') {
         if (derive_timestamp_from_dir(run_dir, timestamp, sizeof(timestamp)) != 0)
-            timestamp[0] = '\0';   /* underivable -> omit the field */
+            timestamp[0] = '\0';   
         reconstructed = 1;
     }
     if (reconstructed) {
@@ -654,7 +639,7 @@ static int run_benchmark_for_dir(const char *run_dir)
             run_id, timestamp[0] ? timestamp : "(unavailable)");
     }
 
-    /* 4. Reconstruct the command arguments (quote-aware) */
+    /* 4. Reconstruct the command arguments */
     cmd_argc = parse_command_string(program, cmd_argv,
                                     (int)(sizeof(cmd_argv)/sizeof(cmd_argv[0])),
                                     store, sizeof(store));
@@ -676,7 +661,7 @@ static int run_benchmark_for_dir(const char *run_dir)
     CPRINT(COLOR_BOLD, "  Program: ");
     printf("%s\n", program);
 
-    /* 5. Run the EXISTING benchmark (logic unchanged) */
+    /* 5. Run the existing benchmark */
     rc = benchmark_run(cmd_argc, cmd_argv, &bench_untraced, &bench_traced);
     if (rc != 0) {
         fprintf(stderr, "  benchmark_run() failed.\n");
@@ -692,9 +677,9 @@ static int run_benchmark_for_dir(const char *run_dir)
     return EXIT_SUCCESS;
 }
 
-/* ---------------------------------------------------------------
+/*
  * print_usage()
- * --------------------------------------------------------------- */
+*/
 static void print_usage(const char *progname)
 {
     fprintf(stderr,
@@ -742,9 +727,9 @@ static void print_usage(const char *progname)
             progname, progname, progname, progname, progname);
 }
 
-/* ---------------------------------------------------------------
+/*
  * main()
- * --------------------------------------------------------------- */
+ */
 int main(int argc, char *argv[])
 {
     int         i;
@@ -754,13 +739,13 @@ int main(int argc, char *argv[])
     int         do_benchmark   = 0;
     int         do_json        = 0;
     const char *json_filename  = "profile.json";
-    char        program_str[512] = "";  /* full target command, for JSON export */
-    const char *results_dir    = "results";  /* RESULTS-MGMT-001: base dir   */
-    char        run_dir[1024]   = "";         /* <results>/<prog>/<timestamp> */
+    char        program_str[512] = "";  
+    const char *results_dir    = "results"; 
+    char        run_dir[1024]   = "";         
     char        timestamp[32]   = "";
-    char        run_id[16]      = "";          /* PHASE-001: run_<8 hex>       */
-    char        auto_json[1100] = "";         /* run_dir/profile.json         */
-    char        auto_csv[1100]  = "";         /* run_dir/results.csv          */
+    char        run_id[16]      = "";          
+    char        auto_json[1100] = "";         
+    char        auto_csv[1100]  = "";         
     syscall_stat_t *stats;
     int         stats_count;
     uint64_t    total;
@@ -776,8 +761,6 @@ int main(int argc, char *argv[])
      * profiling run instead of tracing a new program. It reads the
      * program from <run-directory>/profile.json, runs the existing
      * benchmark, and writes benchmark.json into that same directory.
-     * Handled early because it does not take a target program on the
-     * command line — the program comes from profile.json.
      */
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--benchmark-run") == 0) {
@@ -790,11 +773,10 @@ int main(int argc, char *argv[])
         }
     }
 
-    /* ---- Argument parsing ---- */
+    /* Argument parsing */
     for (i = 1; i < argc; i++) {
         const char *arg = argv[i];
 
-        /* ---- Long options ---- */
         if (strncmp(arg, "--", 2) == 0) {
 
             if (strncmp(arg, "--only=", 7) == 0) {
@@ -803,7 +785,7 @@ int main(int argc, char *argv[])
                     return EXIT_FAILURE;
                 }
                 if (filter_set_only(arg + 7) != 0) {
-                    /* filter_set_only already printed the specific reason */
+                    
                     return EXIT_FAILURE;
                 }
                 had_only = 1;
@@ -814,7 +796,7 @@ int main(int argc, char *argv[])
                     return EXIT_FAILURE;
                 }
                 if (filter_set_exclude(arg + 10) != 0) {
-                    /* filter_set_exclude already printed the specific reason */
+                    
                     return EXIT_FAILURE;
                 }
                 had_exclude = 1;
@@ -832,7 +814,7 @@ int main(int argc, char *argv[])
                 json_filename = arg + 7;
 
             } else if (strncmp(arg, "--results-dir=", 14) == 0) {
-                /* RESULTS-MGMT-001: override the base results directory */
+                
                 results_dir = arg + 14;
                 if (results_dir[0] == '\0') {
                     fprintf(stderr, "\n  Error: --results-dir requires a directory.\n\n");
@@ -852,7 +834,7 @@ int main(int argc, char *argv[])
                 return EXIT_FAILURE;
             }
 
-        /* ---- Short options ---- */
+        /* Short options  */
         } else if (arg[0] == '-' && arg[1] != '\0') {
 
             int j;
@@ -880,7 +862,7 @@ int main(int argc, char *argv[])
                 }
             }
 
-        /* ---- First non-option: start of target program ---- */
+        /* First non-option: start of target program */
         } else {
             target_start = i;
             break;
@@ -893,13 +875,12 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* ---- Benchmark mode: run overhead analysis then exit ---- */
+    /* Benchmark mode: run overhead analysis then exit  */
     if (do_benchmark) {
         double bench_untraced = 0.0;
         double bench_traced   = 0.0;
         int    bench_rc;
 
-        /* BUG-006: validate before any output here too */
         if (!executable_exists(argv[target_start])) {
             fprintf(stderr, "\n  Error: executable not found: %s\n\n",
                     argv[target_start]);
@@ -919,7 +900,7 @@ int main(int argc, char *argv[])
         printf("\n");
 
         make_timestamp(timestamp, sizeof(timestamp));
-        make_run_id(run_id, sizeof(run_id));   /* PHASE-001: fresh run */
+        make_run_id(run_id, sizeof(run_id));   
         {
             char desired[1024];
             if (build_run_dir(results_dir, argv[target_start], timestamp,
@@ -936,7 +917,7 @@ int main(int argc, char *argv[])
         bench_rc = benchmark_run(argc - target_start, &argv[target_start],
                                  &bench_untraced, &bench_traced);
 
-        /* Persist the benchmark result as an artifact (no behavior change) */
+        /* Persist the benchmark result as an artifact  */
         if (bench_rc == 0 && run_dir[0] != '\0') {
             char bench_json[1100];
             int  n = snprintf(bench_json, sizeof(bench_json),
@@ -951,10 +932,10 @@ int main(int argc, char *argv[])
     }
 
     /*
-     * validate the target executable BEFORE printing any
+     * validate the target executable before printing any
      * banner or trace UI. Previously a missing program printed the full
      * interface, then failed deep inside the child with "execvp failed".
-     * Now we fail cleanly and early with a clear message.
+     * We fail cleanly and early with a clear message.
      */
     if (!executable_exists(argv[target_start])) {
         fprintf(stderr, "\n  Error: executable not found: %s\n\n",
@@ -967,8 +948,7 @@ int main(int argc, char *argv[])
     CPRINT(COLOR_BOLD, "  Tracing: ");
     for (i = target_start; i < argc; i++) {
         printf("%s%s", argv[i], (i < argc - 1) ? " " : "");
-        /* Build the full command string for the JSON export (VIS-002).
-         * strncat with bounds keeps us safely inside program_str. */
+        /* Build the full command string for the JSON export.
         strncat(program_str, argv[i],
                 sizeof(program_str) - strlen(program_str) - 1);
         if (i < argc - 1)
@@ -989,11 +969,11 @@ int main(int argc, char *argv[])
      * create this run's output directory
      *     <results_dir>/<program>/<timestamp>/
      * Every run gets a fresh timestamped directory, so runs never
-     * overwrite each other. profile.json and results.csv are written
-     * here automatically (see below).
+     * overwrite each other. 
+     * profile.json and results.csv are written here automatically.
      */
     make_timestamp(timestamp, sizeof(timestamp));
-    make_run_id(run_id, sizeof(run_id));   /* PHASE-001: one ID per run */
+    make_run_id(run_id, sizeof(run_id));  
     {
         char desired[1024];
         if (build_run_dir(results_dir, argv[target_start], timestamp,
@@ -1011,13 +991,13 @@ int main(int argc, char *argv[])
     }
     printf("\n");
 
-    /* ---- Run tracer ---- */
+    /* Run tracer */
     if (tracer_run(argc - target_start, &argv[target_start]) != 0) {
         fprintf(stderr, "tracer_run() failed.\n");
         return EXIT_FAILURE;
     }
 
-    /* ---- Print report ---- */
+    /*  Print report  */
     stats = profiler_get_stats(&stats_count);
     total = profiler_total_syscalls();
     output_print_report(stats, stats_count, total);
@@ -1025,8 +1005,7 @@ int main(int argc, char *argv[])
     /*
      * automatic artifact export.
      * Every run writes profile.json and results.csv into its run
-     * directory by default, so each run is a complete, reproducible
-     * artifact set.
+     * directory by default.
      */
     if (run_dir[0] != '\0') {
         snprintf(auto_json, sizeof(auto_json), "%s/profile.json", run_dir);
@@ -1035,13 +1014,6 @@ int main(int argc, char *argv[])
                             run_id, timestamp, auto_json);
         output_export_csv(stats, stats_count, auto_csv);
 
-        /*
-         * append this run to the registry catalog. We use
-         * the same count>0 filter as the JSON export so the
-         * registry totals match profile.json exactly. The catalog key
-         * is the program basename (matching the results/<program>/...
-         * grouping); the full command stays in profile.json.
-         */
         {
             int      reg_unique = 0;
             uint64_t reg_total  = 0;
@@ -1060,11 +1032,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    /*
-     * Explicit --json / -c flags continue to work exactly as before:
-     * they write to the user-specified path, in addition to the
-     * automatic artifacts above.
-     */
     if (do_json)
         output_export_json(stats, stats_count, total, program_str,
                            run_id, timestamp, json_filename);

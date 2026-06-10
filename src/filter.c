@@ -23,9 +23,9 @@
 #include "../include/filter.h"
 #include "../include/syscall_table.h"
 
-/* ---------------------------------------------------------------
+/* 
  * Internal state
- * --------------------------------------------------------------- */
+ */
 
 typedef enum {
     MODE_NONE    = 0,
@@ -40,20 +40,17 @@ static int           filter_count                     = 0;
 /* Global: top-N limit (0 = show all) — declared extern in filter.h */
 int filter_top_n = 0;
 
-/* ---------------------------------------------------------------
+/* 
  * syscall_name_is_valid()
  *
  * Returns 1 if the name is a valid syscall, 0 otherwise.
- *
- * This avoids adding a new public API to syscall_table; the table
- * is small and this only runs once per filter name at startup.
- * --------------------------------------------------------------- */
+ */
 static int syscall_name_is_valid(const char *name)
 {
     long n;
     for (n = 0; n < MAX_SYSCALL_NUM; n++) {
         const char *known = get_syscall_name(n);
-        /* get_syscall_name returns "unknown" for gaps — skip those */
+        
         if (known != NULL && strcmp(known, "unknown") != 0 &&
             strcmp(known, name) == 0) {
             return 1;
@@ -62,14 +59,11 @@ static int syscall_name_is_valid(const char *name)
     return 0;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * parse_name_list()
  *
  * Parse a comma-separated syscall name list into filter_names[].
- * Example: "read,write,openat" → {"read", "write", "openat"}
- *
- * Returns number of names parsed, or -1 on error.
- * --------------------------------------------------------------- */
+*/
 static int parse_name_list(const char *list)
 {
     char  buf[1024];
@@ -87,7 +81,7 @@ static int parse_name_list(const char *list)
 
     token = strtok(buf, ",");
     while (token != NULL) {
-        /* Skip leading/trailing spaces */
+       
         while (*token == ' ') token++;
         char *end = token + strlen(token) - 1;
         while (end > token && *end == ' ') { *end = '\0'; end--; }
@@ -101,12 +95,7 @@ static int parse_name_list(const char *list)
             fprintf(stderr, "filter: too many names (max %d)\n", FILTER_MAX_NAMES);
             return -1;
         }
-
-        /*
-         * BUG-005 fix: reject names that are not real syscalls.
-         * Previously an unknown name like "abc" was silently accepted,
-         * matched nothing, and produced an empty/confusing report.
-         */
+        
         if (!syscall_name_is_valid(token)) {
             fprintf(stderr, "  Error: unknown syscall filter: %s\n", token);
             return -1;
@@ -119,10 +108,6 @@ static int parse_name_list(const char *list)
         token = strtok(NULL, ",");
     }
 
-    /*
-     * BUG-005 fix: if the list parsed but contained no usable names
-     * (e.g. it was just commas/spaces), that is also an error.
-     */
     if (count == 0) {
         fprintf(stderr, "  Error: no valid syscall names specified.\n");
         return -1;
@@ -169,7 +154,7 @@ int filter_should_show(long syscall_num)
 
     name = get_syscall_name(syscall_num);
 
-    /* Linear search — list is small (max 64 entries), this is fast enough */
+    /* Linear search — list is small max 64 entries.*/
     in_list = 0;
     for (i = 0; i < filter_count; i++) {
         if (strcmp(filter_names[i], name) == 0) {

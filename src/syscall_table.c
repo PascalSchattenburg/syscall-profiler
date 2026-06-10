@@ -2,8 +2,6 @@
  * syscall_table.c
  *
  * Maps x86-64 Linux syscall numbers to names and categories.
- * CATEGORIES:
- * -----------
  * Each syscall is assigned to one of 8 categories (FILE, MEMORY,
  * NETWORK, PROCESS, SIGNAL, IPC, TIME, OTHER). This helps users
  * quickly understand what kind of work a program is doing.
@@ -14,9 +12,9 @@
 #include "../include/output.h"   /* for COLOR_* defines */
 #include <stddef.h>
 
-/* ---------------------------------------------------------------
+/*
  * Internal entry: name + category for each syscall
- * --------------------------------------------------------------- */
+*/
 typedef struct {
     const char        *name;
     syscall_category_t category;
@@ -24,10 +22,6 @@ typedef struct {
 
 /*
  * syscall_table[]
- *
- * Index = syscall number.
- * Contains name string + category.
- * NULL name = undefined/unused slot.
  */
 static const syscall_entry_t syscall_table[] = {
     /* 0  */ { "read",                   CAT_FILE    },
@@ -204,7 +198,7 @@ static const syscall_entry_t syscall_table[] = {
     /* 171*/ { "setdomainname",          CAT_OTHER   },
     /* 172*/ { "iopl",                   CAT_OTHER   },
     /* 173*/ { "ioperm",                 CAT_OTHER   },
-    /* 174*/ { NULL,                     CAT_OTHER   }, /* create_module - removed */
+    /* 174*/ { NULL,                     CAT_OTHER   }, 
     /* 175*/ { "init_module",            CAT_OTHER   },
     /* 176*/ { "delete_module",          CAT_OTHER   },
     /* 177*/ { NULL,                     CAT_OTHER   }, /* get_kernel_syms */
@@ -420,28 +414,28 @@ static const syscall_entry_t syscall_table[] = {
 
 #define SYSCALL_TABLE_SIZE (sizeof(syscall_table) / sizeof(syscall_table[0]))
 
-/* ---------------------------------------------------------------
+/*
  * Category metadata
- * --------------------------------------------------------------- */
+ */
 typedef struct {
-    const char *label;   /* Short 4-char label, e.g. "FILE" */
-    const char *color;   /* ANSI color code                 */
+    const char *label;  
+    const char *color;   
 } category_meta_t;
 
 static const category_meta_t category_meta[] = {
-    /* CAT_FILE    */ { "FILE", "\033[32m"  }, /* green  */
-    /* CAT_MEMORY  */ { "MEM ", "\033[33m"  }, /* yellow */
-    /* CAT_NETWORK */ { "NET ", "\033[34m"  }, /* blue   */
-    /* CAT_PROCESS */ { "PROC", "\033[35m"  }, /* magenta*/
-    /* CAT_SIGNAL  */ { "SIG ", "\033[31m"  }, /* red    */
-    /* CAT_IPC     */ { "IPC ", "\033[36m"  }, /* cyan   */
-    /* CAT_TIME    */ { "TIME", "\033[37m"  }, /* white  */
-    /* CAT_OTHER   */ { "SYS ", "\033[90m"  }, /* dark   */
+     { "FILE", "\033[32m"  }, 
+     { "MEM ", "\033[33m"  }, 
+     { "NET ", "\033[34m"  }, 
+     { "PROC", "\033[35m"  }, 
+     { "SIG ", "\033[31m"  }, 
+     { "IPC ", "\033[36m"  }, 
+     { "TIME", "\033[37m"  }, 
+     { "SYS ", "\033[90m"  }, 
 };
 
-/* ---------------------------------------------------------------
+/*
  * Public API
- * --------------------------------------------------------------- */
+ */
 
 const char *get_syscall_name(long syscall_num)
 {

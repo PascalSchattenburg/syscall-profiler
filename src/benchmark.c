@@ -5,7 +5,6 @@
  * Measures the overhead that ptrace tracing adds to a program's runtime.
  *
  * MEASUREMENT STRATEGY:
- * ----------------------
  * We measure wall-clock time from the parent's perspective:
  *
  *   t_start = clock_gettime(CLOCK_MONOTONIC)
@@ -24,12 +23,10 @@
  *   - This measures the real cost of tracing
  *
  * MULTIPLE RUNS:
- * --------------
  * We run each mode BENCHMARK_RUNS times and take the MINIMUM.
  * Minimum is more reliable than average for this kind of benchmark:
  *   - Average is skewed by occasional scheduler delays
- *   - Minimum represents the "best case" uncontended performance
- *   - This is the approach used by tools like hyperfine and perf
+ *   - Minimum represents the "best case"
  */
 
 #include <stdio.h>
@@ -51,9 +48,9 @@
 /* Number of times to run each mode (min is taken) */
 #define BENCHMARK_RUNS 3
 
-/* ---------------------------------------------------------------
- * get_time_ns()  — monotonic nanosecond timestamp
- * --------------------------------------------------------------- */
+/*
+ * get_time_ns()  - nanosecond timestamp
+*/
 static double get_time_ns(void)
 {
     struct timespec ts;
@@ -61,12 +58,12 @@ static double get_time_ns(void)
     return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
 }
 
-/* ---------------------------------------------------------------
+/*
  * run_untraced()
  *
  * Fork and exec the target program without any ptrace.
  * Returns elapsed nanoseconds, or -1.0 on error.
- * --------------------------------------------------------------- */
+ */
 static double run_untraced(char *argv[])
 {
     pid_t  child;
@@ -79,12 +76,7 @@ static double run_untraced(char *argv[])
     if (child == -1) { perror("benchmark: fork (untraced)"); return -1.0; }
 
     if (child == 0) {
-        /*
-         * Redirect stdout/stderr to /dev/null so the program's output
-         * doesn't pollute our benchmark display.
-         * We use dup2() at the fd level so it also captures
-         * output written directly to fd 1/2 (not just FILE* stdout).
-         */
+    
         int devnull = open("/dev/null", O_WRONLY);
         if (devnull >= 0) {
             dup2(devnull, STDOUT_FILENO);
@@ -104,15 +96,13 @@ static double run_untraced(char *argv[])
     return t_end - t_start;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * run_traced()
  *
- * Fork and exec the target program WITH ptrace tracing.
+ * Fork and exec the target program with ptrace tracing.
  * Runs a minimal ptrace loop (PTRACE_SYSCALL only — no decoding,
  * no output) to measure pure tracing overhead.
- *
- * Returns elapsed nanoseconds, or -1.0 on error.
- * --------------------------------------------------------------- */
+ */
 static double run_traced(char *argv[])
 {
     pid_t  child;
@@ -158,17 +148,17 @@ static double run_traced(char *argv[])
     return t_end - t_start;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * ns_to_ms()  — convert nanoseconds to milliseconds
- * --------------------------------------------------------------- */
+*/
 static double ns_to_ms(double ns) { return ns / 1e6; }
 
-/* ---------------------------------------------------------------
+/* 
  * print_bar()
  *
  * Print a simple ASCII bar scaled to a reference width.
  * bar_chars = (value / max) * BAR_WIDTH
- * --------------------------------------------------------------- */
+ */
 #define BAR_WIDTH 30
 
 static void print_bar(double value, double max_value, const char *color)
@@ -188,11 +178,11 @@ static void print_bar(double value, double max_value, const char *color)
     if (use_color) printf("%s", COLOR_RESET);
 }
 
-/* ---------------------------------------------------------------
+/*
  * benchmark_run()
  *
  * Main entry point. Runs both modes, collects results, prints table.
- * --------------------------------------------------------------- */
+*/
 int benchmark_run(int argc, char *argv[],
                   double *out_untraced_ms, double *out_traced_ms)
 {
@@ -204,7 +194,7 @@ int benchmark_run(int argc, char *argv[],
 
     (void)argc;
 
-    /* ---- Print benchmark header ---- */
+    /* Print benchmark header  */
     printf("\n");
     CPRINT(COLOR_BOLD COLOR_YELLOW,
            "══════════════════════════════════════════════════════════════\n");
@@ -219,7 +209,7 @@ int benchmark_run(int argc, char *argv[],
     CPRINT(COLOR_WHITE,
            "  Program output is suppressed during measurement.\n\n");
 
-    /* ---- Untraced runs ---- */
+    /* Untraced runs  */
     CPRINT(COLOR_CYAN, "  Measuring untraced execution...\n");
     for (i = 0; i < BENCHMARK_RUNS; i++) {
         double t = run_untraced(argv);
@@ -233,7 +223,7 @@ int benchmark_run(int argc, char *argv[],
 
     printf("\n");
 
-    /* ---- Traced runs ---- */
+    /* Traced runs  */
     CPRINT(COLOR_MAGENTA, "  Measuring traced execution...\n");
     for (i = 0; i < BENCHMARK_RUNS; i++) {
         double t = run_traced(argv);
@@ -247,7 +237,7 @@ int benchmark_run(int argc, char *argv[],
 
     printf("\n");
 
-    /* ---- Calculate overhead ---- */
+    /*  Calculate overhead  */
     if (untraced_min > 0.0) {
         overhead_pct = ((traced_min - untraced_min) / untraced_min) * 100.0;
         overhead_x   = traced_min / untraced_min;
@@ -256,7 +246,7 @@ int benchmark_run(int argc, char *argv[],
         overhead_x   = 1.0;
     }
 
-    /* ---- Results table ---- */
+    /* Results table */
     CPRINT(COLOR_BOLD COLOR_YELLOW, "  RESULTS\n");
     CPRINT(COLOR_WHITE, "  %-24s  %10s\n", "────────────────────────", "──────────");
     CPRINT(COLOR_WHITE, "  %-24s  %10s\n", "MODE",                     "TIME (ms)");
@@ -296,12 +286,6 @@ int benchmark_run(int argc, char *argv[],
            "══════════════════════════════════════════════════════════════\n");
     printf("\n");
 
-    /*
-     * RESULTS-MGMT-001: hand the already-computed minimum times back to
-     * the caller (in milliseconds) so they can be persisted as an
-     * artifact. This is purely an additive read-out — it does not change
-     * any measurement, calculation, or the console output above.
-     */
     if (out_untraced_ms != NULL) *out_untraced_ms = ns_to_ms(untraced_min);
     if (out_traced_ms   != NULL) *out_traced_ms   = ns_to_ms(traced_min);
 

@@ -1,7 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-/* These truncation warnings are intentional — snprintf always writes
- * at most ARGS_BUF_SIZE bytes. Strings from child memory are capped
- * in read_string_from_child(). Safe to suppress. */
+
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 
 #include <stdio.h>
@@ -37,7 +35,6 @@ static int read_string_from_child(pid_t pid, unsigned long addr,
         word  = ptrace(PTRACE_PEEKDATA, pid, (void *)(addr + i), NULL);
 
         if (errno != 0) {
-            /* Can't read this memory — stop and mark truncated */
             if (i == 0) {
         snprintf(buf, maxlen, "<err>");
         return -1;
@@ -65,7 +62,7 @@ static void decode_open_flags(int flags, char *buf, int maxlen)
     char tmp[128] = "";
     int  acc = flags & O_ACCMODE;
 
-    /* Access mode (mutually exclusive) */
+    /* Access mode */
     if      (acc == O_RDONLY) strncat(tmp, "O_RDONLY", sizeof(tmp) - strlen(tmp) - 1);
     else if (acc == O_WRONLY) strncat(tmp, "O_WRONLY", sizeof(tmp) - strlen(tmp) - 1);
     else if (acc == O_RDWR)   strncat(tmp, "O_RDWR",   sizeof(tmp) - strlen(tmp) - 1);
@@ -123,11 +120,11 @@ static void decode_fd(long fd, char *buf, int maxlen)
     else                 snprintf(buf, maxlen, "fd=%ld", fd);
 }
 
-/* ---------------------------------------------------------------
+/*
  * decode_mmap_prot()
  *
  * Convert PROT_READ|PROT_WRITE|PROT_EXEC bitmask to a string.
- * --------------------------------------------------------------- */
+*/
 static void decode_mmap_prot(int prot, char *buf, int maxlen)
 {
     char tmp[64] = "";
@@ -146,16 +143,13 @@ static void decode_mmap_prot(int prot, char *buf, int maxlen)
     snprintf(buf, maxlen, "%s", tmp[0] ? tmp : "PROT_?");
 }
 
-/* ---------------------------------------------------------------
+/* 
  * decode_sockaddr()
  *
  * Try to read and decode a sockaddr struct from the child's memory.
- * Works for AF_INET (IPv4) and AF_INET6 (IPv6).
- * Falls back gracefully if memory can't be read.
- * --------------------------------------------------------------- */
+ */
 static void decode_sockaddr(pid_t pid, unsigned long addr, char *buf, int maxlen)
 {
-    /* Read the sa_family field first (first 2 bytes of sockaddr) */
     long word;
     unsigned short family;
 
@@ -168,19 +162,12 @@ static void decode_sockaddr(pid_t pid, unsigned long addr, char *buf, int maxlen
     family = (unsigned short)(word & 0xFFFF);
 
     if (family == AF_INET) {
-        /*
-         * struct sockaddr_in layout:
-         *   uint16_t sin_family  (bytes 0-1)
-         *   uint16_t sin_port    (bytes 2-3, big-endian)
-         *   uint32_t sin_addr    (bytes 4-7)
-         */
         unsigned short port;
         unsigned int   ip;
         char           ip_str[INET_ADDRSTRLEN];
 
         port = (unsigned short)((word >> 16) & 0xFFFF);
-        port = ((port & 0xFF) << 8) | ((port >> 8) & 0xFF); /* ntohs */
-
+        port = ((port & 0xFF) << 8) | ((port >> 8) & 0xFF); 
         errno = 0;
         word  = ptrace(PTRACE_PEEKDATA, pid, (void *)(addr + 4), NULL);
         if (errno != 0) { snprintf(buf, maxlen, "AF_INET:<addr=err>"); return; }
@@ -192,7 +179,6 @@ static void decode_sockaddr(pid_t pid, unsigned long addr, char *buf, int maxlen
     } else if (family == AF_INET6) {
         snprintf(buf, maxlen, "AF_INET6");
     } else if (family == AF_UNIX) {
-        /* struct sockaddr_un: sun_path starts at byte 2 */
         char path[64];
         read_string_from_child(pid, addr + 2, path, sizeof(path));
         snprintf(buf, maxlen, "AF_UNIX \"%s\"", path);
@@ -201,12 +187,11 @@ static void decode_sockaddr(pid_t pid, unsigned long addr, char *buf, int maxlen
     }
 }
 
-/* ---------------------------------------------------------------
+/* 
  * decode_futex_op()
  *
  * Decode the futex operation number into a readable name.
- * The operation is often OR'd with FUTEX_PRIVATE_FLAG (128).
- * --------------------------------------------------------------- */
+ */
 static const char *decode_futex_op(int op)
 {
     switch (op & 0x7F) {   /* mask off FUTEX_PRIVATE_FLAG */
@@ -221,17 +206,16 @@ static const char *decode_futex_op(int op)
     }
 }
 
-/* ===============================================================
+/*
  * decode_args()
  *
  * Main dispatcher: decode arguments for known syscalls.
- * Falls back to showing raw hex for unknown ones.
- * =============================================================== */
+*/
 void decode_args(pid_t child_pid, long syscall_num,
                  const struct user_regs_struct *regs,
                  char *buf)
 {
-    /* Convenience aliases for the six argument registers */
+    
     long a1 = (long)regs->rdi;
     long a2 = (long)regs->rsi;
     long a3 = (long)regs->rdx;
@@ -242,19 +226,19 @@ void decode_args(pid_t child_pid, long syscall_num,
 
     switch (syscall_num) {
 
-    /* ── read(fd, buf, count) ── */
+    /* read(fd, buf, count)*/
     case 0:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s, count=%ld", tmp1, a3);
         break;
 
-    /* ── write(fd, buf, count) ── */
+    /* write(fd, buf, count)*/
     case 1:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s, count=%ld", tmp1, a3);
         break;
 
-    /* ── open(path, flags) ── */
+    /* open(path, flags) */
     case 2:
         read_string_from_child(child_pid, (unsigned long)a1,
                                 tmp1, sizeof(tmp1));
@@ -262,28 +246,28 @@ void decode_args(pid_t child_pid, long syscall_num,
         snprintf(buf, ARGS_BUF_SIZE, "\"%s\", %s", tmp1, tmp2);
         break;
 
-    /* ── close(fd) ── */
+    /* close(fd)  */
     case 3:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s", tmp1);
         break;
 
-    /* ── stat(path, statbuf) ── */
+    /* stat(path, statbuf) */
     case 4:
-    /* ── lstat(path, statbuf) ── */
+    /*  lstat(path, statbuf) */
     case 6:
         read_string_from_child(child_pid, (unsigned long)a1,
                                 tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "\"%s\"", tmp1);
         break;
 
-    /* ── fstat(fd, statbuf) ── */
+    /* fstat(fd, statbuf) */
     case 5:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s", tmp1);
         break;
 
-    /* ── lseek(fd, offset, whence) ── */
+    /* lseek(fd, offset, whence) */
     case 8: {
         const char *whence = (a3 == 0) ? "SEEK_SET"
                            : (a3 == 1) ? "SEEK_CUR"
@@ -293,42 +277,42 @@ void decode_args(pid_t child_pid, long syscall_num,
         break;
     }
 
-    /* ── mmap(addr, length, prot, flags, fd, offset) ── */
+    /* mmap(addr, length, prot, flags, fd, offset */
     case 9:
         decode_mmap_prot((int)a3, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "len=%ld, %s", a2, tmp1);
         break;
 
-    /* ── mprotect(addr, len, prot) ── */
+    /* mprotect(addr, len, prot)  */
     case 10:
         decode_mmap_prot((int)a3, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "len=%ld, %s", a2, tmp1);
         break;
 
-    /* ── munmap(addr, len) ── */
+    /* munmap(addr, len*/
     case 11:
         snprintf(buf, ARGS_BUF_SIZE, "len=%ld", a2);
         break;
 
-    /* ── brk(addr) ── */
+    /* brk(addr)*/
     case 12:
         if (a1 == 0) snprintf(buf, ARGS_BUF_SIZE, "0 (query)");
         else         snprintf(buf, ARGS_BUF_SIZE, "addr=0x%lx", a1);
         break;
 
-    /* ── ioctl(fd, request, ...) ── */
+    /* ioctl(fd, request, ...  */
     case 16:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s, req=0x%lx", tmp1, a2);
         break;
 
-    /* ── pread64(fd, buf, count, offset) ── */
+    /* pread64(fd, buf, count, offset)  */
     case 17:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s, count=%ld, offset=%ld", tmp1, a3, a4);
         break;
 
-    /* ── access(path, mode) ── */
+    /* access(path, mode) */
     case 21: {
         const char *mode = (a2 == 0) ? "F_OK"
                          : (a2 == 4) ? "R_OK"
@@ -340,51 +324,51 @@ void decode_args(pid_t child_pid, long syscall_num,
         break;
     }
 
-    /* ── dup(oldfd) ── */
+    /* dup(oldfd) */
     case 32:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s", tmp1);
         break;
 
-    /* ── dup2(oldfd, newfd) ── */
+    /* dup2(oldfd, newfd)  */
     case 33:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s -> fd=%ld", tmp1, a2);
         break;
 
-    /* ── socket(domain, type, protocol) ── */
+    /* socket(domain, type, protocol)  */
     case 41:
         snprintf(buf, ARGS_BUF_SIZE, "%s, %s",
                  decode_socket_domain((int)a1),
                  decode_socket_type((int)a2));
         break;
 
-    /* ── connect(fd, addr, addrlen) ── */
+    /* connect(fd, addr, addrlen) */
     case 42:
         decode_sockaddr(child_pid, (unsigned long)a2, tmp1, sizeof(tmp1));
         decode_fd(a1, tmp2, sizeof(tmp2));
         snprintf(buf, ARGS_BUF_SIZE, "%s, %s", tmp2, tmp1);
         break;
 
-    /* ── accept(fd, addr, addrlen) ── */
+    /* accept(fd, addr, addrlen) */
     case 43:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s", tmp1);
         break;
 
-    /* ── sendto(fd, buf, len, flags, ...) ── */
+    /* sendto(fd, buf, len, flags, ...) */
     case 44:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s, len=%ld", tmp1, a3);
         break;
 
-    /* ── recvfrom(fd, buf, len, flags, ...) ── */
+    /*recvfrom(fd, buf, len, flags, ...)*/
     case 45:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s, len=%ld", tmp1, a3);
         break;
 
-    /* ── shutdown(fd, how) ── */
+    /*shutdown(fd, how) */
     case 48: {
         const char *how = (a2 == 0) ? "SHUT_RD"
                         : (a2 == 1) ? "SHUT_WR"
@@ -394,54 +378,54 @@ void decode_args(pid_t child_pid, long syscall_num,
         break;
     }
 
-    /* ── bind(fd, addr, addrlen) ── */
+    /* bind(fd, addr, addrlen) */
     case 49:
         decode_sockaddr(child_pid, (unsigned long)a2, tmp1, sizeof(tmp1));
         decode_fd(a1, tmp2, sizeof(tmp2));
         snprintf(buf, ARGS_BUF_SIZE, "%s, %s", tmp2, tmp1);
         break;
 
-    /* ── clone(flags, ...) ── */
+    /* clone(flags, ...)  */
     case 56:
         snprintf(buf, ARGS_BUF_SIZE, "flags=0x%lx", a1);
         break;
 
-    /* ── execve(path, argv, envp) ── */
+    /*  execve(path, argv, envp) */
     case 59:
         read_string_from_child(child_pid, (unsigned long)a1,
                                 tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "\"%s\"", tmp1);
         break;
 
-    /* ── exit(status) / exit_group(status) ── */
+    /* exit(status) / exit_group(status) */
     case 60: case 231:
         snprintf(buf, ARGS_BUF_SIZE, "status=%ld", a1);
         break;
 
-    /* ── kill(pid, sig) ── */
+    /* kill(pid, sig) */
     case 62:
         snprintf(buf, ARGS_BUF_SIZE, "pid=%ld, sig=%ld", a1, a2);
         break;
 
-    /* ── fcntl(fd, cmd, ...) ── */
+    /* fcntl(fd, cmd, ...) */
     case 72:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s, cmd=%ld", tmp1, a2);
         break;
 
-    /* ── getcwd(buf, size) ── */
+    /* getcwd(buf, size) */
     case 79:
         snprintf(buf, ARGS_BUF_SIZE, "size=%ld", a2);
         break;
 
-    /* ── chdir(path) / mkdir(path) / rmdir(path) / unlink(path) ── */
+    /* chdir(path) / mkdir(path) / rmdir(path) / unlink(path) */
     case 80: case 83: case 84: case 87:
         read_string_from_child(child_pid, (unsigned long)a1,
                                 tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "\"%s\"", tmp1);
         break;
 
-    /* ── rename(old, new) ── */
+    /* rename(old, new) */
     case 82:
         read_string_from_child(child_pid, (unsigned long)a1,
                                 tmp1, sizeof(tmp1));
@@ -450,26 +434,26 @@ void decode_args(pid_t child_pid, long syscall_num,
         snprintf(buf, ARGS_BUF_SIZE, "\"%s\" -> \"%s\"", tmp1, tmp2);
         break;
 
-    /* ── statfs(path, buf) ── */
+    /* statfs(path, buf) */
     case 137:
         read_string_from_child(child_pid, (unsigned long)a1,
                                 tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "\"%s\"", tmp1);
         break;
 
-    /* ── getdents64(fd, dirp, count) ── */
+    /* getdents64(fd, dirp, count) */
     case 217:
         decode_fd(a1, tmp1, sizeof(tmp1));
         snprintf(buf, ARGS_BUF_SIZE, "%s, count=%ld", tmp1, a3);
         break;
 
-    /* ── futex(uaddr, op, val, ...) ── */
+    /* futex(uaddr, op, val, ...) */
     case 202:
         snprintf(buf, ARGS_BUF_SIZE, "%s, val=%ld",
                  decode_futex_op((int)a2), a3);
         break;
 
-    /* ── openat(dirfd, path, flags) ── */
+    /* openat(dirfd, path, flags) */
     case 257:
         decode_fd(a1, tmp1, sizeof(tmp1));
         read_string_from_child(child_pid, (unsigned long)a2,
@@ -482,7 +466,7 @@ void decode_args(pid_t child_pid, long syscall_num,
         }
         break;
 
-    /* ── newfstatat(dirfd, path, statbuf, flags) ── */
+    /* newfstatat(dirfd, path, statbuf, flags) */
     case 262:
         decode_fd(a1, tmp1, sizeof(tmp1));
         read_string_from_child(child_pid, (unsigned long)a2,
@@ -490,7 +474,7 @@ void decode_args(pid_t child_pid, long syscall_num,
         snprintf(buf, ARGS_BUF_SIZE, "%s, \"%s\"", tmp1, tmp2);
         break;
 
-    /* ── faccessat(dirfd, path, mode) ── */
+    /* faccessat(dirfd, path, mode) */
     case 269:
         decode_fd(a1, tmp1, sizeof(tmp1));
         read_string_from_child(child_pid, (unsigned long)a2,
@@ -498,12 +482,12 @@ void decode_args(pid_t child_pid, long syscall_num,
         snprintf(buf, ARGS_BUF_SIZE, "%s, \"%s\"", tmp1, tmp2);
         break;
 
-    /* ── prlimit64(pid, resource, ...) ── */
+    /* prlimit64(pid, resource, ...)*/
     case 302:
         snprintf(buf, ARGS_BUF_SIZE, "pid=%ld, res=%ld", a1, a2);
         break;
 
-    /* ── Default: show raw hex for up to 3 args ── */
+    /* Default: show raw hex for up to 3 args */
     default:
         snprintf(buf, ARGS_BUF_SIZE, "0x%lx, 0x%lx, 0x%lx",
                  (unsigned long)a1,
@@ -513,11 +497,11 @@ void decode_args(pid_t child_pid, long syscall_num,
     }
 }
 
-/* ===============================================================
+/* 
  * decode_retval()
  *
  * Format the return value. Negative values are errno codes.
- * =============================================================== */
+*/
 
 /* errno name table — maps -errno to a string name */
 typedef struct { int code; const char *name; } errno_entry_t;
@@ -561,7 +545,7 @@ static const char *errno_name(int err)
 
 void decode_retval(long syscall_num, long retval, char *buf)
 {
-    (void)syscall_num; /* reserved for future context-sensitive decoding */
+    (void)syscall_num; 
 
     if (retval >= 0) {
         /* Success — show the plain number */

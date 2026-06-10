@@ -26,4 +26,4 @@ typedef struct {
 
 int tracer_run(int argc, char *argv[]);
 
-#endif /* TRACER_H */
+#endif 

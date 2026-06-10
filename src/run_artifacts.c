@@ -1,14 +1,9 @@
-/* ===================================================================
+/*
  * run_artifacts.c                                         
  * Dynamic Artifact Detection
- * ===================================================================
  *
- * Read-only filesystem inspection of a run directory. See
- * run_artifacts.h for the full rationale: artifact state is mutable, so
- * it is always recomputed from disk and never stored in the registry,
- * which keeps runs_index.json metadata-only and impossible to leave
- * stale.
- * =================================================================== */
+ * Read-only filesystem inspection of a run directory.
+ */
 
 #include "run_artifacts.h"
 
@@ -50,10 +45,7 @@ static int artifact_exists(const char *run_dir, const char *filename)
 }
 
 /*
- * Detect all artifacts in a single self-contained pass. Each artifact is
- * an independent stat() of the run directory; nothing is cached between
- * calls. A NULL/empty/missing run_dir yields an all-zero result via
- * artifact_exists().
+ * Detect all artifacts in a single self-contained pass.
  */
 RunArtifacts run_detect_artifacts(const char *run_dir)
 {

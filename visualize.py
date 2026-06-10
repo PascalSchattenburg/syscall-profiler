@@ -122,8 +122,8 @@ def setup_style():
     })
 
 
-# ── Colour palette ──────────────────────────────────────────────────────────
-# One distinct, muted colour per category, consistent across all charts.
+# Colour palette
+
 CATEGORY_COLORS = {
     "FILE": "#2d5fa3",   # blue
     "MEM ": "#8a6a2f",   # ochre / brown
@@ -140,8 +140,7 @@ def category_color(cat):
     """Return the plot colour for a category string."""
     return CATEGORY_COLORS.get(cat.strip().upper().ljust(4), DEFAULT_COLOR)
 
-# A plain-language explanation for the most common syscalls, so a reader
-# who is not a kernel expert can understand what the program was doing.
+# A plain-language explanation for the most common syscalls
 SYSCALL_MEANINGS = {
     "read":         "read file contents",
     "write":        "write data",
@@ -243,7 +242,7 @@ def syscall_meaning(name):
     return SYSCALL_MEANINGS.get(name, "")
 
 
-# ── Data loading ─────────────────────────────────────────────────────────────
+#  Data loading 
 
 def load_profile(path):
     """
@@ -268,28 +267,10 @@ def load_profile(path):
     return df, total, unique, program
 
 
-# ── Shared distribution calculation 
+# Shared distribution calculation 
 
 def compute_distribution_data(df, top_n):
-    """
-    Single source of truth for the syscall distribution and the "other"
-    group, used by the standalone distribution chart, the combined
-    report's distribution panel, and the behavioral summary.
 
-    Before this helper existed, those three outputs each computed the
-    "other" group on their own — and the combined report used a different
-    effective top-N (min(top_n, 10)) than the standalone chart (top_n).
-    With the same JSON and the same top_n they could therefore disagree,
-    e.g. "other (8)" on one chart and "other (10)" on another. Centralizing
-    the calculation here guarantees every output reports identical values.
-
-    Returns a dict with:
-      top          : DataFrame of the top_n syscalls shown individually
-      rest         : DataFrame of the grouped (lower-frequency) syscalls
-      other_count  : number of syscall types grouped into "other"
-      other_pct    : their combined share of all calls, in percent
-      has_other    : True if there is at least one grouped syscall
-    """
     top  = df.nlargest(top_n, "count")
     rest = df[~df.index.isin(top.index)]
 
@@ -305,18 +286,10 @@ def compute_distribution_data(df, top_n):
     }
 
 
-# ── Chart 1: Top N syscalls by count
+#  Chart 1: Top N syscalls by count
 
 def chart_counts(df, top_n, out_path):
-    """
-    Bar chart: the top_n most frequently called syscalls.
 
-    WHY THIS CHART:
-    Each bar represents one syscall type. The height is the number of
-    times that syscall was invoked. Colour-coded by category so you can
-    see at a glance whether a program is mostly doing file I/O vs memory
-    operations vs networking.
-    """
     top = df.nlargest(top_n, "count").sort_values("count", ascending=False)
     colors = [category_color(c) for c in top["category"]]
 
@@ -358,20 +331,10 @@ def chart_counts(df, top_n, out_path):
     print(f"  [OK] {out_path}")
 
 
-# ── Chart 2: Syscall distribution 
+# Chart 2: Syscall distribution 
 
 def chart_distribution(df, top_n, out_path, program=""):
-    """
-    VIS-001: Horizontal percentage bar chart of syscall distribution.
 
-    Replaces the old pie chart, which was hard to read when many
-    syscalls had similar colours and the legend mapping was weak.
-
-    A sorted horizontal bar chart is instantly readable: each syscall
-    is its own labelled row, longest bar = most calls, and the exact
-    percentage is printed at the end of every bar. Colour still encodes
-    the syscall category, with a small category legend.
-    """
     data = compute_distribution_data(df, top_n)
     top  = data["top"]
     rest = data["rest"]
@@ -443,15 +406,10 @@ def chart_distribution(df, top_n, out_path, program=""):
     print(f"  [OK] {out_path}")
 
 
-# ── Chart 3: Calls grouped by category 
+#  Chart 3: Calls grouped by category 
 
 def chart_categories(df, out_path):
-    """
-    Horizontal bar chart: total calls per category.
-
-    This answers "what kind of work is this program doing?" at a high
-    level. FILE = disk I/O heavy, MEM = memory allocation heavy, etc.
-    """
+    
     cat_totals = (
         df.groupby("category")["count"]
         .sum()
@@ -486,17 +444,10 @@ def chart_categories(df, out_path):
     print(f"  [OK] {out_path}")
 
 
-# ── Chart 4: Top N slowest syscalls by average time 
+#  Chart 4: Top N slowest syscalls by average time 
 
 def chart_slowest(df, top_n, out_path):
-    """
-    Horizontal bar chart: top_n syscalls ranked by average execution time.
-
-    IMPORTANT NOTE displayed in the chart:
-    These times include ptrace overhead (context switches, scheduler
-    latency). They are NOT the raw kernel execution time. Useful for
-    relative comparison between syscalls, not absolute timing.
-    """
+    
     # Only consider syscalls that were actually called
     called = df[df["count"] > 0].copy()
     top    = called.nlargest(top_n, "avg_ms").sort_values("avg_ms")
@@ -544,28 +495,16 @@ def chart_slowest(df, top_n, out_path):
     print(f"  [OK] {out_path}")
 
 
-# ── Chart 5: Combined overview (all 4 on one page) 
+#  Chart 5: Combined overview
 
 def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
-    """
-    Single-page overview combining all 4 charts.
-
-    Layout:
-      ┌─────────────────┬───────────────┐
-      │  bar (counts)   │  % bar (dist) │
-      ├─────────────────┼───────────────┤
-      │  categories     │  slowest      │
-      └─────────────────┴───────────────┘
-
-    Best for presentations and the final report — one image tells the
-    complete story of what the program did.
-    """
+    
     fig = plt.figure(figsize=(18, 12))
     fig.patch.set_facecolor(PAPER)
 
     gs = GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.35)
 
-    # ── Title block ───
+    #  Title block 
     prog_label = f"Program: {program}" if program else "System Call Profile"
     fig.suptitle(prog_label, fontsize=24, fontstyle="italic",
                  fontfamily=SERIF, color=INK, y=0.995)
@@ -579,7 +518,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
                               color=INK, linewidth=0.8,
                               transform=fig.transFigure))
 
-    # ── Panel 1: counts bar 
+    # Panel 1: counts bar 
     ax1  = fig.add_subplot(gs[0, 0])
     top  = df.nlargest(min(top_n, 12), "count").sort_values("count", ascending=False)
     cols = [category_color(c) for c in top["category"]]
@@ -599,7 +538,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     ax1.spines["top"].set_visible(False)
     ax1.spines["right"].set_visible(False)
 
-    # ── Panel 2: distribution as horizontal % bars 
+    #  Panel 2: distribution as horizontal % bars 
     ax2     = fig.add_subplot(gs[0, 1])
     dist    = compute_distribution_data(df, top_n)
     bar_top = dist["top"]
@@ -634,7 +573,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_visible(False)
 
-    # ── Panel 3: category breakdown 
+    #  Panel 3: category breakdown 
     ax3 = fig.add_subplot(gs[1, 0])
     cat_totals = (
         df.groupby("category")["count"].sum()
@@ -655,7 +594,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     ax3.spines["top"].set_visible(False)
     ax3.spines["right"].set_visible(False)
 
-    # ── Panel 4: slowest syscalls 
+    #  Panel 4: slowest syscalls 
     ax4 = fig.add_subplot(gs[1, 1])
     called   = df[df["count"] > 0]
     slow_top = called.nlargest(min(top_n, 10), "avg_ms").sort_values("avg_ms")
@@ -682,27 +621,10 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     print(f"  [OK] {out_path}")
 
 
-# ── Automatic behavioral summary
+#  Automatic behavioral summary
 
 def generate_summary(df, total_calls, unique_calls, program="", top_n=15):
-    """
-    VIS-003: Produce a short plain-language summary of program behavior,
-    so a reader immediately understands the profile without reading
-    every number.
-
-    The summary is built from the actual data:
-      - dominant category and its percentage
-      - counts of a few specific, easy-to-explain syscalls
-      - a note about memory mapping if it is significant
-      - an explanation of the "other" group (the lower-frequency syscall
-        types that the charts group together for readability)
-
-    This logic is fully deterministic and rule-based: the same profiling
-    JSON always produces the exact same summary. No AI model, LLM, network
-    API, or random sampling is involved, so results are reproducible.
-
-    Returns the summary as a multi-line string.
-    """
+    
     lines = []
 
     if program:
@@ -745,7 +667,6 @@ def generate_summary(df, total_calls, unique_calls, program="", top_n=15):
     if dirs:   activity.append(f"scanned directories {dirs} time{'s' if dirs != 1 else ''}")
 
     if activity:
-        # "The program opened files 7 times, read data 5 times, and ..."
         if len(activity) == 1:
             lines.append(f"The program {activity[0]}.")
         else:
@@ -803,14 +724,6 @@ def main():
 
     setup_style()
 
-    # ── Resolve input: file or run directory 
-    # the first argument may be either a profile.json
-    # file (original behavior) or a run directory containing profile.json.
-    # When a directory is given, we locate profile.json inside it and,
-    # unless --out was explicitly supplied, use that same directory as the
-    # output location — so charts and summary.txt land next to the data,
-    # following the same "attach to an existing run" design as
-    # ./profiler --benchmark-run.
     json_path = args.json_file
     auto_out_dir = None
 
@@ -826,9 +739,8 @@ def main():
         print(f"Error: file not found: {args.json_file}", file=sys.stderr)
         sys.exit(1)
 
-    # ── Output directory
-    # Explicit --out always wins. Otherwise, for a
-    # run directory use that directory.
+    #  Output directory
+
     if args.out is not None:
         out_dir = args.out
         os.makedirs(out_dir, exist_ok=True)
@@ -840,7 +752,7 @@ def main():
     def out(name):
         return os.path.join(out_dir, name)
 
-    # ── Load data 
+    #  Load data 
     print(f"\n  Loading: {json_path}")
     df, total_calls, unique_calls, program = load_profile(json_path)
     # CLI override takes precedence over the JSON field 
@@ -853,18 +765,18 @@ def main():
     print(f"  Output  : {out_dir}\n")
     print("  Generating charts...")
 
-    # ── Generate individual charts 
+    #  Generate individual charts 
     chart_counts(df,       args.top, out("syscall_counts.png"))
     chart_distribution(df, args.top, out("syscall_distribution.png"), program)
     chart_categories(df,             out("category_breakdown.png"))
     chart_slowest(df,      args.top, out("slowest_syscalls.png"))
 
-    # ── Combined overview 
+    #  Combined overview 
     if not args.no_combined:
         chart_combined(df, args.top, total_calls, unique_calls,
                        out("syscall_report.png"), program)
 
-    # ── behavioral summary (console + text file) 
+    #  behavioral summary (console + text file) 
     summary = generate_summary(df, total_calls, unique_calls, program, args.top)
     summary_path = out("summary.txt")
     with open(summary_path, "w") as sf:

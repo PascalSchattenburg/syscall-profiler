@@ -1,30 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 /*
- * tracer.c
- *
- * Core ptrace loop — now with full fork/clone/thread following.
- *
- * ================================================================
- * STEP 4: FORK / CLONE / THREAD SUPPORT
- * ================================================================
- *
- * WHY WE NEED A PROCESS TABLE:
- * ------------------------------
- * Previously we tracked exactly one PID. But modern programs call:
- *   fork()   → creates a new child PROCESS (copy of parent)
- *   vfork()  → like fork but child runs first, shares memory
- *   clone()  → Linux-specific, creates threads OR processes
- *              (pthreads uses clone() internally)
- *   execve() → replaces the current process image
- *
- * Each of these can create a new tracee. We need to:
- *   1. Automatically attach ptrace to each new child/thread
- *   2. Track its in_syscall state independently
- *   3. Aggregate all their stats into the same profiler
- *   4. Keep looping until EVERY tracked process has exited
  *
  * HOW PTRACE CHILD ATTACHMENT WORKS:
- * ------------------------------------
  * When we set PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK |
  * PTRACE_O_TRACECLONE on the parent, the kernel automatically
  * attaches ptrace to any new child/thread it creates.
@@ -32,16 +9,13 @@
  * The new child starts in a STOPPED state. We detect this via
  * a special ptrace event delivered to the PARENT:
  *
- *   status >> 8 == (SIGTRAP | (PTRACE_EVENT_FORK  << 8))  → fork()
- *   status >> 8 == (SIGTRAP | (PTRACE_EVENT_CLONE << 8))  → clone() / thread
- *   status >> 8 == (SIGTRAP | (PTRACE_EVENT_EXEC  << 8))  → execve()
+ *   status >> 8 == (SIGTRAP | (PTRACE_EVENT_FORK  << 8))  -> fork()
+ *   status >> 8 == (SIGTRAP | (PTRACE_EVENT_CLONE << 8))  -> clone() / thread
+ *   status >> 8 == (SIGTRAP | (PTRACE_EVENT_EXEC  << 8))  -> execve()
  *
  * We then call ptrace(PTRACE_GETEVENTMSG) to get the new child's PID,
  * register it in our process table, set its options, and resume it.
  *
- * PROCESS TABLE DESIGN:
- * ----------------------
- * We maintain a fixed-size array of proc_info_t structs.
  * Each entry represents one actively-traced process or thread:
  *   - pid          the OS PID/TID
  *   - in_syscall   whether we're between entry and exit of a syscall
@@ -50,8 +24,6 @@
  *
  * waitpid(-1, ...) waits for ANY child to stop, then we look up
  * which entry in the table corresponds to the stopped PID.
- *
- * ================================================================
  */
 
 #include <stdio.h>
@@ -72,12 +44,11 @@
 #include "../include/output.h"
 #include "../include/syscall_table.h"
 
-/* ---------------------------------------------------------------
+/*
  * Process table
  *
  * Tracks all actively-traced processes and threads.
- * Sized for up to 64 concurrent tracees.
- * --------------------------------------------------------------- */
+ */
 #define MAX_PROCS 64
 
 typedef struct {
@@ -90,9 +61,9 @@ typedef struct {
 static proc_info_t proc_table[MAX_PROCS];
 static int         proc_count = 0;   /* number of active entries */
 
-/* ---------------------------------------------------------------
+/*
  * proc_add()  — register a new tracee in the table
- * --------------------------------------------------------------- */
+*/
 static proc_info_t *proc_add(pid_t pid, int is_thread)
 {
     int i;
@@ -110,9 +81,9 @@ static proc_info_t *proc_add(pid_t pid, int is_thread)
     return NULL;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * proc_find()  — look up a PID in the table
- * --------------------------------------------------------------- */
+*/
 static proc_info_t *proc_find(pid_t pid)
 {
     int i;
@@ -123,9 +94,9 @@ static proc_info_t *proc_find(pid_t pid)
     return NULL;
 }
 
-/* ---------------------------------------------------------------
+/*
  * proc_remove()  — mark a slot as free when a process exits
- * --------------------------------------------------------------- */
+*/
 static void proc_remove(pid_t pid)
 {
     int i;
@@ -138,9 +109,9 @@ static void proc_remove(pid_t pid)
     }
 }
 
-/* ---------------------------------------------------------------
- * get_time_ns()  — monotonic nanosecond timestamp
- * --------------------------------------------------------------- */
+/* 
+ * get_time_ns()  — nanosecond timestamp
+ */
 static double get_time_ns(void)
 {
     struct timespec ts;
@@ -151,9 +122,9 @@ static double get_time_ns(void)
     return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * run_child()  — set up ptrace in the child and exec the target
- * --------------------------------------------------------------- */
+*/
 static void run_child(char *argv[])
 {
     if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) == -1) {
@@ -165,7 +136,7 @@ static void run_child(char *argv[])
     exit(EXIT_FAILURE);
 }
 
-/* ---------------------------------------------------------------
+/*
  * set_trace_options()
  *
  * Apply ptrace options to a process. Called for the initial child
@@ -177,10 +148,9 @@ static void run_child(char *argv[])
  *   PTRACE_O_TRACEFORK     — auto-attach when tracee calls fork()
  *   PTRACE_O_TRACEVFORK    — auto-attach when tracee calls vfork()
  *   PTRACE_O_TRACECLONE    — auto-attach when tracee calls clone()
- *                             (this covers pthreads)
  *   PTRACE_O_TRACEEXEC     — stop tracee after execve() succeeds
  *   PTRACE_O_EXITKILL      — kill all tracees if the tracer exits
- * --------------------------------------------------------------- */
+ */
 static int set_trace_options(pid_t pid)
 {
     long opts = PTRACE_O_TRACESYSGOOD
@@ -191,22 +161,22 @@ static int set_trace_options(pid_t pid)
               | PTRACE_O_EXITKILL;
 
     if (ptrace(PTRACE_SETOPTIONS, pid, 0, opts) == -1) {
-        /* Not fatal — might just mean the process already exited */
+    
         return -1;
     }
     return 0;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * handle_new_child()
  *
  * Called when the tracer receives a PTRACE_EVENT_FORK/VFORK/CLONE
- * notification from a tracee. We:
+ * notification from a tracee:
  *   1. Read the new child's PID via PTRACE_GETEVENTMSG
  *   2. Add it to our process table
  *   3. Set its trace options
  *   4. Print a notification line
- * --------------------------------------------------------------- */
+*/
 static void handle_new_child(pid_t parent_pid, int is_thread)
 {
     unsigned long new_pid_ul = 0;
@@ -215,7 +185,6 @@ static void handle_new_child(pid_t parent_pid, int is_thread)
 
     /*
      * PTRACE_GETEVENTMSG gives us the new child's PID.
-     * This is the canonical way to get it — don't rely on guessing.
      */
     if (ptrace(PTRACE_GETEVENTMSG, parent_pid, NULL, &new_pid_ul) == -1) {
         perror("tracer: PTRACE_GETEVENTMSG");
@@ -231,7 +200,6 @@ static void handle_new_child(pid_t parent_pid, int is_thread)
     /*
      * The new child may already be stopped waiting for us, or it may
      * not have started yet. waitpid with WNOHANG checks without blocking.
-     * Either way, we add it to the table and will see it in the main loop.
      */
     waitpid(new_pid, &child_status, WNOHANG);
 
@@ -250,33 +218,18 @@ static void handle_new_child(pid_t parent_pid, int is_thread)
                    new_pid, parent_pid);
         }
     }
-
-    /*
-     * Resume the new child. It was stopped by ptrace on creation.
-     * We use PTRACE_SYSCALL so it stops at the next syscall boundary.
-     */
     ptrace(PTRACE_SYSCALL, new_pid, NULL, NULL);
 }
 
-/* ---------------------------------------------------------------
+/* 
  * tracer_run()
- *
- * Main tracing loop — now multi-process aware.
- *
- * Key differences from the single-process version:
- *
- *   1. We use waitpid(-1, ...) to wait for ANY child to stop,
+ *   1. use waitpid(-1, ...) to wait for ANY child to stop,
  *      not just the original child_pid.
- *
- *   2. Each stopped PID is looked up in proc_table[].
- *      State (in_syscall, current_sys) is per-PID.
- *
- *   3. ptrace events (PTRACE_EVENT_FORK etc.) are detected via
- *      the top byte of waitpid status. We call handle_new_child()
+ *   2. Each stopped PID is looked up in proc_table[]
+ *   3. ptrace events detected via the top byte of waitpid status. We call handle_new_child()
  *      which registers the new PID and prints a notification.
- *
  *   4. We loop until proc_count == 0 (all processes/threads exited).
- * --------------------------------------------------------------- */
+ */
 int tracer_run(int argc, char *argv[])
 {
     pid_t  child_pid;
@@ -311,8 +264,7 @@ int tracer_run(int argc, char *argv[])
     }
 
     /*
-     * Wait for the child's first stop. After execvp(), the child
-     * receives SIGTRAP (from PTRACE_TRACEME) and stops automatically.
+     * Wait for the child's first stop.
      */
     if (waitpid(child_pid, &status, 0) == -1) {
         perror("tracer: waitpid (initial)");
@@ -329,12 +281,11 @@ int tracer_run(int argc, char *argv[])
     /* Start tracing the initial child */
     ptrace(PTRACE_SYSCALL, child_pid, NULL, NULL);
 
-    /* ================================================================
+    /*        
      * Main tracing loop
      *
      * We use waitpid(-1, ...) to receive events from ANY tracee.
-     * The loop runs until all tracked processes have exited.
-     * ================================================================ */
+     */
     while (proc_count > 0) {
         pid_t        stopped_pid;
         proc_info_t *proc;
@@ -342,7 +293,6 @@ int tracer_run(int argc, char *argv[])
 
         /*
          * Wait for any child to stop.
-         * __WALL is needed to also catch thread stops (CLONE_THREAD children).
          */
         stopped_pid = waitpid(-1, &status, __WALL);
         if (stopped_pid == -1) {
@@ -352,7 +302,7 @@ int tracer_run(int argc, char *argv[])
             break;
         }
 
-        /* ---- Process exited normally ---- */
+        /* Process exited normally */
         if (WIFEXITED(status)) {
             proc = proc_find(stopped_pid);
             if (proc != NULL) {
@@ -378,7 +328,7 @@ int tracer_run(int argc, char *argv[])
             continue;
         }
 
-        /* ---- Process killed by signal ---- */
+        /*lProcess killed by signal */
         if (WIFSIGNALED(status)) {
             proc = proc_find(stopped_pid);
             if (show_trace && proc != NULL) {
@@ -392,15 +342,15 @@ int tracer_run(int argc, char *argv[])
             continue;
         }
 
-        /* ---- Process stopped ---- */
+        /* Process stopped  */
         if (!WIFSTOPPED(status)) continue;
 
         proc = proc_find(stopped_pid);
         if (proc == NULL) {
             /*
-             * Unknown PID stopped — this can happen when a new child
-             * is reported to us before we've processed the parent's
-             * PTRACE_EVENT_* notification. Register it and continue.
+             * Unknown PID stopped — can happen when a new child
+             * is reported to before parent's processed the 
+             * PTRACE_EVENT_* notification.
              */
             proc_add(stopped_pid, 0);
             set_trace_options(stopped_pid);
@@ -410,18 +360,10 @@ int tracer_run(int argc, char *argv[])
 
         /*
          * Decode the stop reason.
-         *
-         * WSTOPSIG(status) gives the low 8 bits.
-         * The high byte (status >> 8) carries ptrace event info.
-         *
-         * Syscall-stop:  WSTOPSIG == (SIGTRAP | 0x80)   (needs TRACESYSGOOD)
-         * Fork event:    (status >> 8) == SIGTRAP | (PTRACE_EVENT_FORK  << 8)
-         * Clone event:   (status >> 8) == SIGTRAP | (PTRACE_EVENT_CLONE << 8)
-         * Exec event:    (status >> 8) == SIGTRAP | (PTRACE_EVENT_EXEC  << 8)
          */
         event = (status >> 8);
 
-        /* ---- Fork / vfork event — new child process ---- */
+        /*  Fork / vfork event — new child process */
         if (event == (SIGTRAP | (PTRACE_EVENT_FORK  << 8)) ||
             event == (SIGTRAP | (PTRACE_EVENT_VFORK << 8))) {
             handle_new_child(stopped_pid, 0 /* process */);
@@ -429,19 +371,19 @@ int tracer_run(int argc, char *argv[])
             continue;
         }
 
-        /* ---- Clone event — new thread (or process) ---- */
+        /*  Clone event — new thread (or process)  */
         if (event == (SIGTRAP | (PTRACE_EVENT_CLONE << 8))) {
             /*
              * clone() is used for both threads and processes.
              * We label them all as threads since clone() is how
-             * pthreads works — the distinction matters for display.
+             * pthreads works — distinction matters for display.
              */
             handle_new_child(stopped_pid, 1 /* thread */);
             ptrace(PTRACE_SYSCALL, stopped_pid, NULL, NULL);
             continue;
         }
 
-        /* ---- Exec event — process replaced its image ---- */
+        /* Exec event — process replaced its image  */
         if (event == (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
             if (show_trace) {
                 CPRINT(COLOR_YELLOW,
@@ -458,7 +400,7 @@ int tracer_run(int argc, char *argv[])
             continue;
         }
 
-        /* ---- Syscall-stop (the normal case) ---- */
+        /* Syscall-stop  */
         if (WSTOPSIG(status) == (SIGTRAP | 0x80)) {
             struct user_regs_struct regs;
             double timestamp_ns;
@@ -472,7 +414,7 @@ int tracer_run(int argc, char *argv[])
             timestamp_ns = get_time_ns();
 
             if (!proc->in_syscall) {
-                /* ── SYSCALL ENTRY ── */
+                /* SYSCALL ENTRY  */
                 proc->current_sys = (long)regs.orig_rax;
 
                 profiler_record_entry(proc->current_sys, timestamp_ns);
@@ -481,7 +423,7 @@ int tracer_run(int argc, char *argv[])
                 proc->in_syscall = 1;
 
             } else {
-                /* ── SYSCALL EXIT ── */
+                /*  SYSCALL EXIT */
                 long retval = (long)regs.rax;
 
                 profiler_record_exit(proc->current_sys, timestamp_ns);
@@ -494,7 +436,7 @@ int tracer_run(int argc, char *argv[])
             continue;
         }
 
-        /* ---- Any other stop (signal delivery) ---- */
+        /* Any other stop (signal delivery) */
         /*
          * Deliver the signal to the tracee by passing it as the
          * fourth argument to PTRACE_SYSCALL. This is important —

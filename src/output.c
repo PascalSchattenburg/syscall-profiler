@@ -12,9 +12,9 @@
 #include "../include/decoder.h"
 #include "../include/filter.h"
 
-/* ---------------------------------------------------------------
+/* 
  * Global flags
- * --------------------------------------------------------------- */
+*/
 int use_color        = 1;
 int show_trace       = 1;
 int export_csv       = 0;
@@ -26,9 +26,9 @@ const char *csv_filename = "syscall_profile.csv";
         else           printf(fmt, ##__VA_ARGS__); \
     } while (0)
 
-/* ---------------------------------------------------------------
+/* 
  * output_print_header()
- * --------------------------------------------------------------- */
+ */
 void output_print_header(void)
 {
     CPRINT(COLOR_BOLD COLOR_CYAN,
@@ -42,11 +42,11 @@ void output_print_header(void)
     printf("\n");
 }
 
-/* ---------------------------------------------------------------
+/* 
  * output_trace_entry()
  *
  * Called at syscall ENTRY.
- * --------------------------------------------------------------- */
+ */
 void output_trace_entry(pid_t child_pid, long syscall_num,
                         const struct user_regs_struct *regs)
 {
@@ -70,9 +70,7 @@ void output_trace_entry(pid_t child_pid, long syscall_num,
     decode_syscall_args(child_pid, regs, args, sizeof(args));
 
     /*
-     * Print WITHOUT a trailing newline.
-     * output_trace_exit() will append " = <retval>\n".
-     * We flush stdout so the partial line appears immediately.
+     * Print without a trailing newline.
      */
     if (use_color) {
         printf("  %s[%s]%s %-16s(%s)",
@@ -85,12 +83,12 @@ void output_trace_entry(pid_t child_pid, long syscall_num,
     fflush(stdout);
 }
 
-/* ---------------------------------------------------------------
+/* 
  * output_trace_exit()
  *
  * Called at syscall EXIT. Appends " = retval\n" to the line
  * that output_trace_entry() started.
- * --------------------------------------------------------------- */
+ */
 void output_trace_exit(long syscall_num, long retval)
 {
     char retval_str[64];
@@ -111,9 +109,9 @@ void output_trace_exit(long syscall_num, long retval)
     }
 }
 
-/* ---------------------------------------------------------------
+/* 
  * Sorting helpers
- * --------------------------------------------------------------- */
+*/
 static int compare_by_count_desc(const void *a, const void *b)
 {
     const syscall_stat_t *sa = (const syscall_stat_t *)a;
@@ -123,9 +121,9 @@ static int compare_by_count_desc(const void *a, const void *b)
     return 0;
 }
 
-/* ---------------------------------------------------------------
+/* 
  * print_category_summary() 
- * --------------------------------------------------------------- */
+ */
 static void print_category_summary(syscall_stat_t *stats, int count,
                                    uint64_t total_calls)
 {
@@ -142,7 +140,7 @@ static void print_category_summary(syscall_stat_t *stats, int count,
     for (i = 0; i < count; i++) {
         /* Respect filter — skip syscalls excluded by --only or --exclude */
         if (!filter_should_show(stats[i].number)) continue;
-        if (stats[i].call_count == 0)             continue; /* BUG-002 */
+        if (stats[i].call_count == 0)             continue; 
         syscall_category_t cat = get_syscall_category(stats[i].number);
         cat_counts[cat] += stats[i].call_count;
     }
@@ -169,9 +167,9 @@ static void print_category_summary(syscall_stat_t *stats, int count,
     }
 }
 
-/* ---------------------------------------------------------------
+/* 
  * output_print_report()  
- * --------------------------------------------------------------- */
+*/
 void output_print_report(syscall_stat_t *stats, int count, uint64_t total_calls)
 {
     int i;
@@ -194,17 +192,12 @@ void output_print_report(syscall_stat_t *stats, int count, uint64_t total_calls)
      * when a filter is active, ALL summary statistics
      * (total syscalls, unique count, category totals, percentages)
      * must reflect the FILTERED dataset, not the full one.
-     *
-     * We compute the filtered totals once here and pass them down
-     * to every part of the report. When no filter is active,
-     * filter_should_show() returns 1 for everything, so these values
-     * equal the full dataset.
      */
     uint64_t filtered_total  = 0;
     int      filtered_unique = 0;
     for (i = 0; i < count; i++) {
         if (!filter_should_show(stats[i].number)) continue;
-        if (stats[i].call_count == 0)             continue; /* BUG-002 */
+        if (stats[i].call_count == 0)             continue; 
         filtered_total += stats[i].call_count;
         filtered_unique++;
     }
@@ -255,7 +248,7 @@ void output_print_report(syscall_stat_t *stats, int count, uint64_t total_calls)
             total_ms = s->total_time_ns / 1e6;
             avg_ms   = (s->call_count > 0)
                        ? (s->total_time_ns / s->call_count) / 1e6 : 0.0;
-            /* BUG-003 fix: percentages use the filtered total */
+            
             pct      = (filtered_total > 0)
                        ? (100.0 * s->call_count / filtered_total) : 0.0;
 
@@ -340,9 +333,9 @@ void output_print_report(syscall_stat_t *stats, int count, uint64_t total_calls)
     free(sorted);
 }
 
-/* ---------------------------------------------------------------
+/* 
  * output_export_csv()  (unchanged from Step 1)
- * --------------------------------------------------------------- */
+*/
 void output_export_csv(syscall_stat_t *stats, int count, const char *filename)
 {
     int i;
@@ -369,23 +362,23 @@ void output_export_csv(syscall_stat_t *stats, int count, const char *filename)
     printf("  [CSV] Results exported to: %s\n\n", filename);
 }
 
-/* ---------------------------------------------------------------
+/* 
  * output_export_json()
  *
  * Export the full profiling results as a JSON file.
- * --------------------------------------------------------------- */
+*/
 void output_export_json(syscall_stat_t *stats, int count,
                         uint64_t total_calls, const char *program,
                         const char *run_id, const char *timestamp,
                         const char *filename)
 {
     int    i;
-    int    valid_count = 0;     /* unique syscalls with count > 0 */
-    uint64_t valid_total = 0;   /* sum of call counts (count > 0)  */
-    int    written = 0;         /* array entries written so far    */
+    int    valid_count = 0;     
+    uint64_t valid_total = 0;  
+    int    written = 0;         
     FILE  *f = fopen(filename, "w");
 
-    (void)total_calls;  /* recomputed below to stay consistent with BUG-002 */
+    (void)total_calls;  
 
     if (f == NULL) {
         perror("output_export_json: fopen");
@@ -426,7 +419,7 @@ void output_export_json(syscall_stat_t *stats, int count,
         double             total_ms, avg_ms;
         const char        *comma;
 
-        /* BUG-002: skip syscalls that never completed (count == 0) */
+        
         if (s->call_count == 0) continue;
 
         cat      = get_syscall_category(s->number);
@@ -462,12 +455,12 @@ void output_export_json(syscall_stat_t *stats, int count,
     printf("  [JSON] Results exported to: %s\n\n", filename);
 }
 
-/* ---------------------------------------------------------------
+/* 
  * output_export_benchmark_json()
  *
  * persist a benchmark result as a JSON artifact so
  * it can live in the run directory alongside profile.json / results.csv.
- * --------------------------------------------------------------- */
+*/
 void output_export_benchmark_json(const char *program,
                                   double untraced_ms, double traced_ms,
                                   const char *run_id, const char *timestamp,

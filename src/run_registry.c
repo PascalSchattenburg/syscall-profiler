@@ -1,7 +1,6 @@
-/* ===================================================================
+/*
  * run_registry.c                                          
  * Run Registry Access Layer
- * ===================================================================
  */
 
 #include "run_registry.h"
@@ -29,12 +28,6 @@ static void copy_json_string(const char *src, char *out, size_t outsz)
     out[oi] = '\0';
 }
 
-/*
- * Within [start, end), find the first occurrence of the key token
- * "\"<key>\"" and return a pointer just past the following ':' (skipping
- * spaces), i.e. at the first character of the value. Returns NULL if the
- * key is not present in the range.
- */
 static const char *find_value(const char *start, const char *end,
                               const char *key)
 {
@@ -64,7 +57,6 @@ static const char *find_value(const char *start, const char *end,
     return NULL;
 }
 
-/* Read a string field <key> from object slice [start,end) into out. */
 static void read_string_field(const char *start, const char *end,
                               const char *key, char *out, size_t outsz)
 {
@@ -76,7 +68,6 @@ static void read_string_field(const char *start, const char *end,
         copy_json_string(v + 1, out, outsz);
 }
 
-/* Read a numeric field <key> from object slice [start,end). */
 static long read_long_field(const char *start, const char *end,
                             const char *key)
 {
@@ -87,9 +78,6 @@ static long read_long_field(const char *start, const char *end,
     return strtol(v, NULL, 10);
 }
 
-/* Read the whole file at `path` into a malloc'd, NUL-terminated buffer.
- * Returns NULL if the file cannot be opened/read (caller treats this as
- * "no registry"). On success the caller must free the buffer. */
 static char *read_whole_file(const char *path)
 {
     FILE  *f;
@@ -142,8 +130,7 @@ RunRegistry registry_load(const char *results_dir)
 
     /*
      * Each entry begins with the "run_id" key, so we treat every
-     * "run_id" occurrence as the start of a record. The record's other
-     * fields lie between this "run_id" and the next one.
+     * "run_id" occurrence as the start of a record.
      */
     p = buf;
     for (;;) {
@@ -157,13 +144,11 @@ RunRegistry registry_load(const char *results_dir)
         next    = strstr(rec + 8, "\"run_id\"");
         rec_end = (next != NULL) ? next : file_end;
 
-        /* Grow the array if needed (simple doubling). */
         if (reg.count == capacity) {
             size_t   newcap = (capacity == 0) ? 8 : capacity * 2;
             RunInfo *tmp    = (RunInfo *)realloc(reg.runs,
                                                  newcap * sizeof(RunInfo));
             if (tmp == NULL) {
-                /* Out of memory: return what we have so far, consistent. */
                 break;
             }
             reg.runs = tmp;
@@ -220,7 +205,6 @@ RunInfo *registry_find_by_program(RunRegistry *registry, const char *program)
     if (registry == NULL || program == NULL)
         return NULL;
 
-    /* Exact match only — no substring/partial/fuzzy matching. */
     for (i = 0; i < registry->count; i++) {
         if (strcmp(registry->runs[i].program, program) == 0)
             return &registry->runs[i];
