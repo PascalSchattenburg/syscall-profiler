@@ -1,5 +1,5 @@
 /* ===================================================================
- * run_artifacts.c                                          PHASE-002
+ * run_artifacts.c                                         
  * Dynamic Artifact Detection
  * ===================================================================
  *
@@ -8,15 +8,6 @@
  * it is always recomputed from disk and never stored in the registry,
  * which keeps runs_index.json metadata-only and impossible to leave
  * stale.
- *
- * Implementation notes:
- *   - Uses stat() only. No JSON parsing, no registry lookups, no
- *     external libraries, no caching.
- *   - The canonical artifact filenames match what the rest of the
- *     project writes into a run directory:
- *         profile.json        (C profiler)
- *         benchmark.json      (C profiler, --benchmark / --benchmark-run)
- *         syscall_report.png  (visualize.py, combined report)
  * =================================================================== */
 
 #include "run_artifacts.h"
@@ -33,10 +24,6 @@
 
 /*
  * Return 1 if "<run_dir>/<filename>" exists and is a regular file, else 0.
- *
- * A trailing slash on run_dir is tolerated. If the joined path would not
- * fit in the buffer, or run_dir is NULL/empty, the artifact is treated as
- * absent (0) rather than risking a truncated, misleading path.
  */
 static int artifact_exists(const char *run_dir, const char *filename)
 {
@@ -48,17 +35,16 @@ static int artifact_exists(const char *run_dir, const char *filename)
     if (run_dir == NULL || run_dir[0] == '\0')
         return 0;
 
-    /* Drop a single trailing '/' so we don't produce "dir//file". */
     len = strlen(run_dir);
     if (run_dir[len - 1] == '/')
         len--;
 
     n = snprintf(path, sizeof(path), "%.*s/%s", (int)len, run_dir, filename);
     if (n < 0 || (size_t)n >= sizeof(path))
-        return 0;   /* path too long to represent safely */
+        return 0;   
 
     if (stat(path, &st) != 0)
-        return 0;   /* does not exist (or not accessible) */
+        return 0;   
 
     return S_ISREG(st.st_mode) ? 1 : 0;
 }
@@ -79,12 +65,11 @@ RunArtifacts run_detect_artifacts(const char *run_dir)
 
     return a;
 }
-
-/* ---- Convenience single-artifact queries -------------------------------
+/*
  * These delegate to run_detect_artifacts() so the existence rules are
  * defined in exactly one place. When more than one answer is needed,
  * call run_detect_artifacts() directly to avoid repeating the scan.
- * ----------------------------------------------------------------------- */
+*/
 
 int run_has_profile(const char *run_dir)
 {

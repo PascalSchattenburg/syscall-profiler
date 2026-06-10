@@ -5,24 +5,6 @@
  *
  * The key concept here is pairing: every syscall ENTRY must be matched
  * with a corresponding EXIT to calculate execution time.
- *
- * TIMING METHODOLOGY:
- * -------------------
- * We use clock_gettime(CLOCK_MONOTONIC) for high-resolution timing.
- * CLOCK_MONOTONIC is preferred over CLOCK_REALTIME because:
- *   - It never goes backward (unaffected by NTP or admin adjustments)
- *   - It's monotonically increasing (safe for duration calculations)
- *   - It has nanosecond resolution on modern Linux kernels
- *
- * IMPORTANT CAVEAT:
- * The time we measure is NOT just the syscall's kernel execution time.
- * It also includes:
- *   - The overhead of ptrace() itself (kernel delivers SIGTRAP, we wake up)
- *   - Scheduling delays (we might not be scheduled immediately)
- *   - The time to read registers with ptrace(PTRACE_GETREGS)
- *
- * This overhead can be significant (tens of microseconds per syscall).
- * This is the fundamental tradeoff of ptrace-based tracing.
  */
 
 #include <stdio.h>
@@ -52,7 +34,7 @@ static uint64_t total_call_count = 0;
  *
  * Look up (or create) the stats entry for a given syscall number.
  * Returns a pointer to the syscall_stat_t, or NULL if we've exceeded
- * our maximum capacity (shouldn't happen in practice).
+ * our maximum capacity .
  */
 static syscall_stat_t *find_or_create_stat(long syscall_num)
 {
@@ -120,10 +102,6 @@ void profiler_record_entry(long syscall_num, double timestamp_ns)
     /*
      * Save the entry timestamp.
      * We'll use it in profiler_record_exit() to compute duration.
-     *
-     * Note: in_progress guards against mismatched entry/exit events.
-     * Under normal conditions this won't happen, but defensive coding
-     * is good practice in systems programming.
      */
     stat->entry_time_ns = timestamp_ns;
     stat->in_progress   = 1;
@@ -134,10 +112,6 @@ void profiler_record_entry(long syscall_num, double timestamp_ns)
  *
  * Called when we detect a syscall EXIT (after the kernel handled it).
  * Computes the duration and updates statistics.
- *
- * Parameters:
- *   syscall_num  - the syscall number (should match the previous entry)
- *   timestamp_ns - current time in nanoseconds
  */
 void profiler_record_exit(long syscall_num, double timestamp_ns)
 {
@@ -156,8 +130,6 @@ void profiler_record_exit(long syscall_num, double timestamp_ns)
     /*
      * Sanity check: duration should be positive.
      * If it's negative, something went wrong with the clock
-     * (e.g., CPU migration between cores with unsynchronized TSC).
-     * We use CLOCK_MONOTONIC which should prevent this, but be safe.
      */
     if (duration_ns < 0.0) {
         duration_ns = 0.0;

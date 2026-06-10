@@ -22,7 +22,6 @@ Run:
     python app.py
     # then open http://127.0.0.1:5000
 
-Optional: set SYSCALL_RESULTS_DIR to point at a results/ directory elsewhere.
 """
 
 import json
@@ -33,7 +32,6 @@ from flask import Flask, jsonify, send_file, abort, render_template
 # --------------------------------------------------------------------------
 # Paths
 # --------------------------------------------------------------------------
-# webui/ lives inside the project root; results/ sits next to it by default.
 WEBUI_DIR    = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(WEBUI_DIR)
 RESULTS_DIR  = os.environ.get(
@@ -48,7 +46,7 @@ ARTIFACT_BENCHMARK     = "benchmark.json"
 ARTIFACT_SUMMARY       = "summary.txt"
 ARTIFACT_VISUALIZATION = "syscall_report.png"
 
-# PNGs the visualizer can produce — the only files the image route will serve.
+# PNGs the visualizer can produce.
 ALLOWED_IMAGES = {
     "syscall_report.png",
     "syscall_counts.png",

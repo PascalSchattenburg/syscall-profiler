@@ -42,20 +42,13 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.gridspec import GridSpec
 
-# ── Editorial style layer (matches the Web UI) ───────────────────────────────
 # This block only changes *appearance*. No data, statistics, filenames, output
 # paths, or chart contents are affected.
-PAPER = "#fafaf8"   # off-white paper background
-INK   = "#0d0d0d"   # dark ink text / rules
-GRID  = "#d0cdc7"   # very subtle gridlines
-MUTED = "#8a8a8a"   # muted grey for secondary annotations
+PAPER = "#fafaf8"   
+INK   = "#0d0d0d"  
+GRID  = "#d0cdc7"   
+MUTED = "#8a8a8a"   
 
-# The product uses only the IBM Plex family: IBM Plex Serif for titles, IBM
-# Plex Sans for subtitles, IBM Plex Mono for axis labels, ticks, legends, and
-# annotations. These stacks are RESOLVED at runtime in setup_style(): an IBM
-# Plex face is used only if it is actually installed; otherwise the stack is
-# just the matching generic family ("serif"/"sans-serif"/"monospace"), which
-# always resolves silently — so a clean install produces zero font warnings.
 SERIF      = ["serif"]
 SANS_STACK = ["sans-serif"]
 MONO_STACK = ["monospace"]
@@ -147,11 +140,8 @@ def category_color(cat):
     """Return the plot colour for a category string."""
     return CATEGORY_COLORS.get(cat.strip().upper().ljust(4), DEFAULT_COLOR)
 
-
-# ── VIS-004: Human-readable syscall meanings ─────────────────────────────────
 # A plain-language explanation for the most common syscalls, so a reader
 # who is not a kernel expert can understand what the program was doing.
-# Used in the readability bar chart labels and the meaning legend table.
 SYSCALL_MEANINGS = {
     "read":         "read file contents",
     "write":        "write data",
@@ -269,16 +259,16 @@ def load_profile(path):
     total    = data["total_syscalls"]
     unique   = data["unique_syscalls"]
     syscalls = data["syscalls"]
-    program  = data.get("program", "")   # VIS-002 — graceful if missing
+    program  = data.get("program", "")   
 
     df = pd.DataFrame(syscalls)
-    df["category"] = df["category"].str.strip()   # remove trailing spaces
+    df["category"] = df["category"].str.strip() 
     df["pct"]      = df["count"] / total * 100    # percentage of total calls
 
     return df, total, unique, program
 
 
-# ── Shared distribution calculation (BUG-VIS-005 fix) ────────────────────────
+# ── Shared distribution calculation 
 
 def compute_distribution_data(df, top_n):
     """
@@ -315,7 +305,7 @@ def compute_distribution_data(df, top_n):
     }
 
 
-# ── Chart 1: Top N syscalls by count (vertical bar chart) ────────────────────
+# ── Chart 1: Top N syscalls by count
 
 def chart_counts(df, top_n, out_path):
     """
@@ -368,7 +358,7 @@ def chart_counts(df, top_n, out_path):
     print(f"  [OK] {out_path}")
 
 
-# ── Chart 2: Syscall distribution (VIS-001: horizontal % bar chart) ──────────
+# ── Chart 2: Syscall distribution 
 
 def chart_distribution(df, top_n, out_path, program=""):
     """
@@ -415,10 +405,10 @@ def chart_distribution(df, top_n, out_path, program=""):
                 f"{pct:.1f}%", va="center", ha="left",
                 fontsize=9, fontweight="bold", color=INK)
 
-    # Y labels: syscall name + plain-language meaning (VIS-004)
+    # Y labels: syscall name + plain-language meaning 
     ylabels = []
     for n in names:
-        base = n.split(" ")[0]               # strip "(N)" suffix if present
+        base = n.split(" ")[0]               
         meaning = syscall_meaning(base)
         if meaning and not n.startswith("other"):
             ylabels.append(f"{n}  -  {meaning}")
@@ -429,7 +419,7 @@ def chart_distribution(df, top_n, out_path, program=""):
 
     title = "Syscall Distribution (% of total calls)"
     if program:
-        title += f"\nProgram: {program}"          # VIS-002
+        title += f"\nProgram: {program}"          
     ax.set_title(title, fontsize=15, fontweight="bold", pad=16, fontfamily=SERIF, color=INK)
     ax.set_xlabel("Percentage of total syscalls", fontsize=11)
     ax.set_xlim(0, max_pct * 1.15)
@@ -438,7 +428,7 @@ def chart_distribution(df, top_n, out_path, program=""):
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    # Small category legend (only categories actually present)
+    # Small category legend 
     present = [c for c in CATEGORY_COLORS if c.strip() in
                [x.strip() for x in cats]]
     legend_patches = [mpatches.Patch(color=CATEGORY_COLORS[c], label=c.strip())
@@ -453,7 +443,7 @@ def chart_distribution(df, top_n, out_path, program=""):
     print(f"  [OK] {out_path}")
 
 
-# ── Chart 3: Calls grouped by category ───────────────────────────────────────
+# ── Chart 3: Calls grouped by category 
 
 def chart_categories(df, out_path):
     """
@@ -496,7 +486,7 @@ def chart_categories(df, out_path):
     print(f"  [OK] {out_path}")
 
 
-# ── Chart 4: Top N slowest syscalls by average time ──────────────────────────
+# ── Chart 4: Top N slowest syscalls by average time 
 
 def chart_slowest(df, top_n, out_path):
     """
@@ -554,7 +544,7 @@ def chart_slowest(df, top_n, out_path):
     print(f"  [OK] {out_path}")
 
 
-# ── Chart 5: Combined overview (all 4 on one page) ───────────────────────────
+# ── Chart 5: Combined overview (all 4 on one page) 
 
 def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     """
@@ -575,9 +565,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
 
     gs = GridSpec(2, 2, figure=fig, hspace=0.45, wspace=0.35)
 
-    # ── Title block (VIS-002: include program name) — editorial header ───
-    # Mirrors the Web UI Run Detail header: a large IBM Plex Serif program
-    # a monospace stat line, and a thin rule. Same information as before.
+    # ── Title block ───
     prog_label = f"Program: {program}" if program else "System Call Profile"
     fig.suptitle(prog_label, fontsize=24, fontstyle="italic",
                  fontfamily=SERIF, color=INK, y=0.995)
@@ -586,12 +574,12 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
              f"   -   {unique_calls} unique syscalls",
              ha="center", va="top", fontsize=11, fontfamily=SANS_STACK,
              color=MUTED, transform=fig.transFigure)
-    # thin editorial rule under the title
+
     fig.add_artist(plt.Line2D([0.07, 0.93], [0.948, 0.948],
                               color=INK, linewidth=0.8,
                               transform=fig.transFigure))
 
-    # ── Panel 1: counts bar ──────────────────────────────────────
+    # ── Panel 1: counts bar 
     ax1  = fig.add_subplot(gs[0, 0])
     top  = df.nlargest(min(top_n, 12), "count").sort_values("count", ascending=False)
     cols = [category_color(c) for c in top["category"]]
@@ -611,10 +599,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     ax1.spines["top"].set_visible(False)
     ax1.spines["right"].set_visible(False)
 
-    # ── Panel 2: distribution as horizontal % bars (VIS-001) ─────
-    # BUG-VIS-005 fix: use the same shared calculation (and the same
-    # top_n) as the standalone distribution chart and the summary, so
-    # the "other (N)" value is identical across all outputs.
+    # ── Panel 2: distribution as horizontal % bars 
     ax2     = fig.add_subplot(gs[0, 1])
     dist    = compute_distribution_data(df, top_n)
     bar_top = dist["top"]
@@ -649,7 +634,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_visible(False)
 
-    # ── Panel 3: category breakdown ──────────────────────────────
+    # ── Panel 3: category breakdown 
     ax3 = fig.add_subplot(gs[1, 0])
     cat_totals = (
         df.groupby("category")["count"].sum()
@@ -670,7 +655,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     ax3.spines["top"].set_visible(False)
     ax3.spines["right"].set_visible(False)
 
-    # ── Panel 4: slowest syscalls ────────────────────────────────
+    # ── Panel 4: slowest syscalls 
     ax4 = fig.add_subplot(gs[1, 1])
     called   = df[df["count"] > 0]
     slow_top = called.nlargest(min(top_n, 10), "avg_ms").sort_values("avg_ms")
@@ -697,7 +682,7 @@ def chart_combined(df, top_n, total_calls, unique_calls, out_path, program=""):
     print(f"  [OK] {out_path}")
 
 
-# ── VIS-003: Automatic behavioral summary ────────────────────────────────────
+# ── Automatic behavioral summary
 
 def generate_summary(df, total_calls, unique_calls, program="", top_n=15):
     """
@@ -774,9 +759,6 @@ def generate_summary(df, total_calls, unique_calls, program="", top_n=15):
                      "caused by loading shared libraries at startup.")
 
     # "other" group explanation.
-    # BUG-VIS-005 fix: use the same shared calculation as the charts so
-    # the count and percentage reported here match the distribution chart
-    # and the combined report exactly.
     dist = compute_distribution_data(df, top_n)
     n_other = dist["other_count"]
     if dist["has_other"] and total_calls > 0:
@@ -797,7 +779,7 @@ def generate_summary(df, total_calls, unique_calls, program="", top_n=15):
     return "\n".join(lines)
 
 
-# ── CLI entry point ───────────────────────────────────────────────────────────
+# ── CLI entry point
 
 def main():
     parser = argparse.ArgumentParser(
@@ -819,11 +801,10 @@ def main():
                              "(normally read from the JSON 'program' field)")
     args = parser.parse_args()
 
-    # Apply the editorial/print visual style (appearance only).
     setup_style()
 
-    # ── Resolve input: file or run directory ──────────────────────
-    # RESULTS-MGMT-003: the first argument may be either a profile.json
+    # ── Resolve input: file or run directory 
+    # the first argument may be either a profile.json
     # file (original behavior) or a run directory containing profile.json.
     # When a directory is given, we locate profile.json inside it and,
     # unless --out was explicitly supplied, use that same directory as the
@@ -845,10 +826,9 @@ def main():
         print(f"Error: file not found: {args.json_file}", file=sys.stderr)
         sys.exit(1)
 
-    # ── Output directory ──────────────────────────────────────────
-    # Explicit --out always wins (backwards compatible). Otherwise, for a
-    # run directory use that directory; for a plain file fall back to the
-    # file's own directory (original behavior).
+    # ── Output directory
+    # Explicit --out always wins. Otherwise, for a
+    # run directory use that directory.
     if args.out is not None:
         out_dir = args.out
         os.makedirs(out_dir, exist_ok=True)
@@ -860,10 +840,10 @@ def main():
     def out(name):
         return os.path.join(out_dir, name)
 
-    # ── Load data ─────────────────────────────────────────────────
+    # ── Load data 
     print(f"\n  Loading: {json_path}")
     df, total_calls, unique_calls, program = load_profile(json_path)
-    # CLI override takes precedence over the JSON field (VIS-002)
+    # CLI override takes precedence over the JSON field 
     if args.program:
         program = args.program
     print(f"  Syscalls: {total_calls:,} total, {unique_calls} unique types")
@@ -873,18 +853,18 @@ def main():
     print(f"  Output  : {out_dir}\n")
     print("  Generating charts...")
 
-    # ── Generate individual charts ────────────────────────────────
+    # ── Generate individual charts 
     chart_counts(df,       args.top, out("syscall_counts.png"))
     chart_distribution(df, args.top, out("syscall_distribution.png"), program)
     chart_categories(df,             out("category_breakdown.png"))
     chart_slowest(df,      args.top, out("slowest_syscalls.png"))
 
-    # ── Combined overview ─────────────────────────────────────────
+    # ── Combined overview 
     if not args.no_combined:
         chart_combined(df, args.top, total_calls, unique_calls,
                        out("syscall_report.png"), program)
 
-    # ── VIS-003: behavioral summary (console + text file) ─────────
+    # ── behavioral summary (console + text file) 
     summary = generate_summary(df, total_calls, unique_calls, program, args.top)
     summary_path = out("summary.txt")
     with open(summary_path, "w") as sf:

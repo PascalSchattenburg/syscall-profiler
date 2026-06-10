@@ -4,45 +4,6 @@
 #include <stddef.h>      /* size_t */
 #include "run_artifacts.h"  /* RunArtifacts, for the Phase 002 bridge */
 
-/* ===================================================================
- * run_registry.h                                          PHASE-003
- * Run Registry Access Layer
- * ===================================================================
- *
- * This module is the single owner of registry access. It loads the
- * Phase 001 catalog (results/runs_index.json) once and exposes the runs
- * as plain C structs, so future components (a CLI tool, an API, a WebUI)
- * can ask "what runs exist?" and "give me run X" through code instead of
- * each re-implementing JSON parsing and filesystem layout knowledge.
- *
- * WHY A DEDICATED ACCESS LAYER
- * ----------------------------
- * The registry already exists, but until now nothing centrally loads it.
- * Without this layer, every future consumer would open runs_index.json,
- * parse the same JSON, and hard-code the same paths — duplicated, fragile,
- * and easy to get subtly wrong. Concentrating that knowledge here means
- * the on-disk format is known in exactly one place; if it ever changes,
- * only this module changes.
- *
- * WHAT IT IS NOT (Phase 003 scope)
- * --------------------------------
- * This is a purely internal, in-process access layer: no CLI flag, no
- * server, no HTTP, no database, no daemon. It is additive — it changes
- * nothing about tracing, profiling, benchmarking, the export formats, or
- * the registry's on-disk format. It only *reads* runs_index.json.
- *
- * RELATIONSHIP TO PHASE 001 / PHASE 002
- * -------------------------------------
- *   - Phase 001 writes immutable per-run metadata into runs_index.json.
- *     This module reads exactly that metadata into RunInfo records and
- *     never adds, removes, or rewrites anything in the registry.
- *   - Phase 002 detects mutable artifact state from the filesystem.
- *     registry_get_artifacts() is the bridge: given a RunInfo (Phase 001
- *     metadata), it returns live RunArtifacts (Phase 002 detection) by
- *     calling run_detect_artifacts(run->path). Artifact state therefore
- *     stays dynamic and is still never stored in the registry.
- * =================================================================== */
-
 /*
  * One run's metadata, mirroring exactly the fields stored per entry in
  * runs_index.json. This is metadata only — it intentionally does NOT
@@ -68,24 +29,6 @@ typedef struct {
     RunInfo *runs;
     size_t   count;
 } RunRegistry;
-
-/* -------------------------------------------------------------------
- * MEMORY OWNERSHIP CONTRACT  (read before using this module)
- * -------------------------------------------------------------------
- *  - registry_load() returns a RunRegistry that OWNS its `runs` array.
- *  - The caller OWNS that returned RunRegistry and MUST eventually pass
- *    it to registry_free() to release the array. registry_free() is the
- *    only place that frees registry memory.
- *  - registry_find_by_id() and registry_find_by_program() return a
- *    BORROWED pointer into the registry's `runs` array. It is valid only
- *    until registry_free() is called on that registry. The caller MUST
- *    NOT free a returned RunInfo*, and must not use it after the registry
- *    is freed.
- *  - RunInfo uses fixed-size buffers and holds no pointers, so there are
- *    no per-record allocations to free — registry_free() frees the single
- *    `runs` block and nothing else.
- * ------------------------------------------------------------------- */
-
 /*
  * Load the run registry from <results_dir>/runs_index.json.
  *

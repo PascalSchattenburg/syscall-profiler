@@ -76,8 +76,7 @@
  * Process table
  *
  * Tracks all actively-traced processes and threads.
- * Sized for up to 64 concurrent tracees — more than enough for
- * any typical university test program.
+ * Sized for up to 64 concurrent tracees.
  * --------------------------------------------------------------- */
 #define MAX_PROCS 64
 

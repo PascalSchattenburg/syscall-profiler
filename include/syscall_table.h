@@ -1,19 +1,6 @@
 #ifndef SYSCALL_TABLE_H
 #define SYSCALL_TABLE_H
 
-/*
- * syscall_table.h
- *
- * Maps Linux x86-64 syscall numbers to human-readable names and categories.
- *
- * On x86-64 Linux, when a process makes a system call, the syscall number
- * is placed in the RAX register. We intercept this with ptrace and look
- * it up in this table to get a readable name like "read" or "write".
- *
- * Reference: /usr/include/asm/unistd_64.h
- *            Linux kernel: arch/x86/entry/syscalls/syscall_64.tbl
- */
-
 #define MAX_SYSCALL_NUM 450
 
 /*

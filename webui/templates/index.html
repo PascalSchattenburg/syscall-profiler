@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Syscall Profiler — Observability Research Console</title>
-<!-- Self-hosted fonts (no external CDN) so the UI renders offline during the demo. -->
+<!-- Self-hosted fonts -->
 <style>
   /* IBM Plex Mono */
   @font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:300;font-display:swap;src:url("/static/fonts/ibm-plex-mono-latin-300-normal.woff2") format("woff2");}
@@ -761,10 +761,7 @@ function keyNum(val) { return `<span style="color:var(--hi)">${val}</span>`; }
 /* ═══════════════════════════════════════════════
    DATA
    ═══════════════════════════════════════════════ */
-/* All data now comes from the Flask backend (real profiler output).
-   The fake demo arrays have been replaced by an API client + normalized
-   state. Field names below match what the render functions already use,
-   so the editorial markup stays untouched. */
+/* All data now comes from the Flask backend (real profiler output) */
 const API = {
   async json(path){ const r = await fetch(path); if(!r.ok) throw new Error(path+" -> "+r.status); return r.json(); },
   async text(path){ const r = await fetch(path); return r.ok ? r.text() : null; },
@@ -996,8 +993,8 @@ function drawSymbol(ctx, W, H, alpha){
 /* ═══════════════════════════════════════════════
    ASIDE WIDGETS
    ═══════════════════════════════════════════════ */
-function drawFreqMap() { /* removed in final cleanup — Call Density Map sidebar deleted */ }
-function buildTopSyscalls() { /* removed in final cleanup — Most-called Syscalls sidebar deleted */ }
+function drawFreqMap() {}
+function buildTopSyscalls() {}
 
 
 /* ═══════════════════════════════════════════════
@@ -1095,7 +1092,7 @@ function renderDashboard(){
   if(!runs.length){ root.innerHTML = EMPTY_RUNS_HTML; return; }
 
   // ---- real metrics ----
-  const latest = runs[0]; // /api/runs is newest-first
+  const latest = runs[0]; 
   const peak = runs.slice().sort((a,b)=>b.syscalls-a.syscalls)[0];
   const withBench = runs.filter(r=>r.overhead_x!==null);
   const highestOv = withBench.slice().sort((a,b)=>b.overhead_x-a.overhead_x)[0] || null;
@@ -1103,7 +1100,7 @@ function renderDashboard(){
   const benchCount = runs.filter(r=>r.artifacts && r.artifacts.benchmark).length;
   const incomplete = runs.filter(r=>r.status!=="OK");
 
-  // per-run syscall volume (real) for the chart
+  // per-run syscall volume for the chart
   const volData = runs.slice().reverse().map(r=>({l:(r.program||"").slice(0,5), v:r.syscalls}));
 
   root.innerHTML=`
@@ -1717,8 +1714,6 @@ function setActive(view){
 
 function render(view, payload=null){
   history_stack.push(view);
-  // Instant in-app navigation: switch immediately, no splash/loading overlay.
-  // (The splash animation runs only on initial load / hard refresh.)
   setActive(view);
   root.innerHTML="";
   if(view==="dashboard") renderDashboard();
@@ -1735,7 +1730,6 @@ document.querySelectorAll(".nav-btn[data-view]").forEach(btn=>{
 document.addEventListener("keydown",e=>{
   const map={"1":"dashboard","2":"programs","3":"runs","4":"benchmarks","5":"comparisons"};
   if(map[e.key]) render(map[e.key]);
-  // UX FIX: backspace goes back
   if(e.key==="Backspace" && history_stack.length>1 && document.activeElement.tagName!=="INPUT"){
     history_stack.pop();
     const prev=history_stack[history_stack.length-1];

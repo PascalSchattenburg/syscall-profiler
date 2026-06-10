@@ -23,12 +23,6 @@
  * the CHILD's virtual address space, not ours. We can't dereference them
  * directly. Instead we use ptrace(PTRACE_PEEKDATA) to read the child's
  * memory word by word.
- *
- * SAFETY:
- * -------
- * - All string reads use read_string_from_child() which handles errors
- * - If a pointer is NULL or unreadable, we show "(null)" or "0x..."
- * - We truncate long strings to keep output readable
  */
 
 #include <stdio.h>

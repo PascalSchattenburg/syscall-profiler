@@ -2,28 +2,12 @@
  * syscall_table.c
  *
  * Maps x86-64 Linux syscall numbers to names and categories.
- *
- * HOW SYSCALL NUMBERS WORK:
- * --------------------------
- * On x86-64 Linux, syscall numbers are defined in:
- *   /usr/include/asm/unistd_64.h
- *
- * When a program calls read(), glibc places:
- *   - syscall number (0 for read) in register RAX
- *   - arguments in RDI, RSI, RDX, R10, R8, R9
- * Then executes the "syscall" CPU instruction.
- * The kernel performs the work, puts the return value in RAX,
- * and returns control to user space.
- *
- * ptrace() lets us intercept this at both entry and exit points.
- *
  * CATEGORIES:
  * -----------
  * Each syscall is assigned to one of 8 categories (FILE, MEMORY,
  * NETWORK, PROCESS, SIGNAL, IPC, TIME, OTHER). This helps users
  * quickly understand what kind of work a program is doing.
  *
- * Source: Linux kernel arch/x86/entry/syscalls/syscall_64.tbl
  */
 
 #include "../include/syscall_table.h"

@@ -15,12 +15,6 @@
  *
  * These modes are mutually exclusive. If the user passes both
  * --only and --exclude, main.c reports an error before we get here.
- *
- * NAME MATCHING:
- * --------------
- * We match by syscall NAME (string), not number. This means the
- * user types "openat" not "257", which is more intuitive.
- * Matching is case-sensitive (all Linux syscall names are lowercase).
  */
 
 #include <stdio.h>
@@ -48,10 +42,6 @@ int filter_top_n = 0;
 
 /* ---------------------------------------------------------------
  * syscall_name_is_valid()
- *
- * BUG-005 helper: check whether a given name corresponds to a real
- * syscall. We scan the syscall table (0 .. MAX_SYSCALL_NUM) and
- * compare each known name against the candidate.
  *
  * Returns 1 if the name is a valid syscall, 0 otherwise.
  *
@@ -140,10 +130,6 @@ static int parse_name_list(const char *list)
 
     return count;
 }
-
-/* ---------------------------------------------------------------
- * Public API
- * --------------------------------------------------------------- */
 
 int filter_set_only(const char *list)
 {

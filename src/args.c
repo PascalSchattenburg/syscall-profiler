@@ -3,41 +3,6 @@
  * at most ARGS_BUF_SIZE bytes. Strings from child memory are capped
  * in read_string_from_child(). Safe to suppress. */
 #pragma GCC diagnostic ignored "-Wformat-truncation"
-/*
- * args.c
- *
- * Syscall argument decoding for the System Call Profiler.
- *
- * ═══════════════════════════════════════════════════════════
- *  HOW ARGUMENT READING WORKS
- * ═══════════════════════════════════════════════════════════
- *
- * x86-64 SYSCALL ABI:
- * -------------------
- * The Linux x86-64 calling convention for syscalls uses these
- * registers for arguments (in order):
- *
- *   RDI = arg1    RSI = arg2    RDX = arg3
- *   R10 = arg4    R8  = arg5    R9  = arg6
- *
- * (Note: R10 is used instead of RCX because the syscall instruction
- * uses RCX internally for the return address.)
- *
- * READING STRINGS FROM CHILD MEMORY:
- * ------------------------------------
- * String arguments (like filenames in openat) are pointers into the
- * child process's virtual address space. We can't dereference them
- * directly — we must use ptrace(PTRACE_PEEKDATA) to read them.
- *
- * PTRACE_PEEKDATA reads one word (8 bytes) at a time from the child.
- * We loop, reading 8 bytes at a time, until we find a null terminator.
- *
- * SAFETY:
- * -------
- * Any pointer from the child might be NULL, unmapped, or otherwise
- * invalid. We check for NULL explicitly and catch ptrace errors
- * (errno is set on failure). Bad reads fall back to "<??>" safely.
- */
 
 #include <stdio.h>
 #include <string.h>
@@ -52,18 +17,6 @@
 
 #include "../include/args.h"
 
-/* ---------------------------------------------------------------
- * read_string_from_child()
- *
- * Read a null-terminated string from the child's address space
- * using PTRACE_PEEKDATA.
- *
- * PTRACE_PEEKDATA returns one machine word (8 bytes on x86-64) at
- * a time. We copy bytes into our buffer until we hit '\0' or fill up.
- *
- * Returns number of bytes written (not counting null terminator),
- * or -1 on error.
- * --------------------------------------------------------------- */
 static int read_string_from_child(pid_t pid, unsigned long addr,
                                    char *buf, int maxlen)
 {
@@ -107,12 +60,6 @@ static int read_string_from_child(pid_t pid, unsigned long addr,
     return i;
 }
 
-/* ---------------------------------------------------------------
- * decode_open_flags()
- *
- * Convert O_RDONLY / O_WRONLY / O_RDWR / O_CREAT etc. bitmask
- * into a readable string like "O_RDWR|O_CREAT|O_TRUNC".
- * --------------------------------------------------------------- */
 static void decode_open_flags(int flags, char *buf, int maxlen)
 {
     char tmp[128] = "";
@@ -144,11 +91,6 @@ static void decode_open_flags(int flags, char *buf, int maxlen)
     snprintf(buf, maxlen, "%s", tmp);
 }
 
-/* ---------------------------------------------------------------
- * decode_socket_domain()
- *
- * Convert AF_INET / AF_UNIX / AF_INET6 etc. to a name string.
- * --------------------------------------------------------------- */
 static const char *decode_socket_domain(int domain)
 {
     switch (domain) {
@@ -161,12 +103,6 @@ static const char *decode_socket_domain(int domain)
     }
 }
 
-/* ---------------------------------------------------------------
- * decode_socket_type()
- *
- * Convert SOCK_STREAM / SOCK_DGRAM / etc. to a name string.
- * We mask off SOCK_NONBLOCK and SOCK_CLOEXEC before comparing.
- * --------------------------------------------------------------- */
 static const char *decode_socket_type(int type)
 {
     switch (type & ~(SOCK_NONBLOCK | SOCK_CLOEXEC)) {
@@ -178,12 +114,6 @@ static const char *decode_socket_type(int type)
     }
 }
 
-/* ---------------------------------------------------------------
- * decode_fd()
- *
- * Format a file descriptor argument.
- * fd=0,1,2 get special names; AT_FDCWD (-100) gets its constant.
- * --------------------------------------------------------------- */
 static void decode_fd(long fd, char *buf, int maxlen)
 {
     if      (fd == 0)    snprintf(buf, maxlen, "stdin");

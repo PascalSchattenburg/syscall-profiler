@@ -45,17 +45,6 @@
 #include "../include/filter.h"
 #include "../include/benchmark.h"
 
-/* ===============================================================
- * RESULTS-MGMT-001 — Organized results directory helpers
- *
- * These helpers build and create the per-run output directory:
- *
- *     <results_dir>/<program>/<timestamp>/
- *
- * They only deal with path strings and directory creation. They do
- * not touch tracing, profiling, decoding, or any export format.
- * =============================================================== */
-
 /* ---------------------------------------------------------------
  * make_timestamp()
  *
@@ -73,18 +62,9 @@ static void make_timestamp(char *buf, size_t bufsz)
 }
 
 /* ---------------------------------------------------------------
- * make_run_id()                                       — PHASE-001
+ * make_run_id()                                    
  *
- * Write a unique run identifier into buf in the form:
- *
- *     run_<8 lowercase hex chars>      e.g. "run_a8f3d21c"
- *
- * buf must be at least 13 bytes ("run_" + 8 + NUL). The 32 random
- * bits come from /dev/urandom when available; if that cannot be
- * read we fall back to a time+pid seeded rand(), which is good
- * enough for a per-run label (this is metadata, not a security
- * token). This helper only produces a string — it does not create
- * directories, touch tracing, or change any export format.
+ * Write a unique run identifier
  * --------------------------------------------------------------- */
 static void make_run_id(char *buf, size_t bufsz)
 {
@@ -119,14 +99,6 @@ static void make_run_id(char *buf, size_t bufsz)
  * basename_of()
  *
  * Derive a clean program name for use as a directory name.
- *
- *   "ls"               -> "ls"
- *   "/usr/bin/python3" -> "python3"
- *   "./profiler"       -> "profiler"
- *
- * Takes the portion after the last '/'. If that would be empty
- * (e.g. the command ends in '/'), falls back to "program".
- * Writes into out (size outsz).
  * --------------------------------------------------------------- */
 static void basename_of(const char *program, char *out, size_t outsz)
 {
@@ -139,23 +111,6 @@ static void basename_of(const char *program, char *out, size_t outsz)
     strncpy(out, name, outsz - 1);
     out[outsz - 1] = '\0';
 }
-
-/* ===============================================================
- * PHASE-001 — Run registry (results/runs_index.json)
- *
- * A lightweight CATALOG of completed profiling runs. It is NOT a
- * second copy of the syscall data — only per-run metadata, so a
- * future WebUI/API can list runs without scanning every directory.
- *
- * Rules implemented here:
- *   - one entry is APPENDED per complete profiling run
- *   - existing entries are never overwritten or duplicated
- *   - the write is atomic (temp file + rename) so a crash cannot
- *     corrupt the catalog
- *
- * Inline --benchmark and --benchmark-run do NOT call this (they are
- * not complete profiling runs); only the normal tracing path does.
- * =============================================================== */
 
 /* Write a single registry object (2-space indented, no trailing
  * newline). Strings are JSON-escaped for " and \ like our other
@@ -343,7 +298,7 @@ static int mkdir_recursive(const char *path)
  *     <results_dir>/<program>/<timestamp>
  *
  * The program name is cleaned via basename_of(). The result is
- * written into out (size outsz). Returns 0 on success, -1 if the
+ * written into out. Returns 0 on success, -1 if the
  * composed path would not fit in the buffer.
  *
  * Note: this only builds the string; mkdir_recursive() creates it.
@@ -374,12 +329,6 @@ static int build_run_dir(const char *results_dir,
  * Given a desired run directory path, guarantee uniqueness so that no
  * run ever reuses or overwrites another run's directory — even when two
  * runs start within the same second and therefore share a timestamp.
- *
- * If <path> does not exist yet, it is used as-is. Otherwise we try
- * <path>_2, <path>_3, ... until we find a name that does not exist,
- * and write that into out (size outsz).
- *
- * Returns 0 on success, -1 if no free name could be formed.
  * --------------------------------------------------------------- */
 static int make_unique_run_dir(const char *path, char *out, size_t outsz)
 {
@@ -404,32 +353,11 @@ static int make_unique_run_dir(const char *path, char *out, size_t outsz)
     return -1;
 }
 
-
-/* ===============================================================
- * RESULTS-MGMT-002 — Link a benchmark to an existing profiling run
- *
- * These helpers support --benchmark-run <dir>, which reads the
- * "program" field from <dir>/profile.json, reconstructs the command,
- * runs the existing benchmark, and stores benchmark.json in <dir>.
- * They do not change benchmark measurement or any export format.
- * =============================================================== */
-
 /* ---------------------------------------------------------------
- * read_json_string_field()                            — PHASE-001
+ * read_json_string_field()                            
  *
  * Extract the value of a top-level string field <key> from a small
- * JSON file (profile.json). Minimal, dependency-free: it scans for
- * "<key>", advances past the ':' to the quoted value, and copies it
- * un-escaping \" and \\ (the only escapes our writer emits).
- *
- * This generalizes the original read_program_from_json() so the same
- * logic can also recover "run_id" and "timestamp" for benchmark
- * inheritance. It does NOT modify the file.
- *
- * Returns:
- *    0  success, value written to out (NUL-terminated)
- *   -1  could not open/read the file
- *   -2  field not found (or malformed)
+ * JSON file (profile.json). 
  * --------------------------------------------------------------- */
 static int read_json_string_field(const char *json_path, const char *key,
                                   char *out, size_t outsz)
@@ -510,17 +438,6 @@ static int read_program_from_json(const char *json_path,
  * Split a command string into an argv-style array, honoring single
  * and double quotes so that arguments containing spaces are kept
  * together. Backslash escapes the next character.
- *
- *   ls                         -> ["ls"]
- *   python3 test.py            -> ["python3", "test.py"]
- *   cat "my file.txt"          -> ["cat", "my file.txt"]
- *   echo 'a b'                 -> ["echo", "a b"]
- *
- * Tokens are written into the caller-provided storage:
- *   - out_argv[] receives pointers (NULL-terminated)
- *   - store[]    receives the actual token bytes
- *
- * Returns the number of tokens, or -1 on overflow.
  * --------------------------------------------------------------- */
 static int parse_command_string(const char *cmd,
                                 char *out_argv[], int max_args,
@@ -577,14 +494,8 @@ static int parse_command_string(const char *cmd,
 /* ---------------------------------------------------------------
  * executable_exists()
  *
- * BUG-006 helper: check whether the target program can be found and
+ * check whether the target program can be found and
  * executed BEFORE we print any banner or start tracing.
- *
- * Two cases, matching how execvp() resolves names:
- *   1. Name contains '/'  → check that exact path directly.
- *   2. Bare name (e.g. "ls") → search each directory in $PATH.
- *
- * Returns 1 if an executable match is found, 0 otherwise.
  * --------------------------------------------------------------- */
 static int executable_exists(const char *prog)
 {
@@ -616,21 +527,11 @@ static int executable_exists(const char *prog)
 }
 
 /* ---------------------------------------------------------------
- * derive_timestamp_from_dir()                         — PHASE-001
+ * derive_timestamp_from_dir()                    
  *
  * Legacy fallback for --benchmark-run: when an old profile.json has
  * no "timestamp" field, recover it from the run directory's own name,
  * which our layout already encodes as the last path component:
- *
- *     results/ls/2026-06-06_11-24-36      -> "2026-06-06_11-24-36"
- *     results/ls/2026-06-06_11-24-36_2    -> "2026-06-06_11-24-36"
- *
- * We accept the leading 19 chars only if they match the expected
- * "YYYY-MM-DD_HH-MM-SS" shape, so an arbitrary directory name does
- * not get written as a bogus timestamp. Trailing chars (e.g. the
- * "_2" collision suffix) are ignored.
- *
- * Returns 0 and writes out on success, -1 if no plausible timestamp.
  * --------------------------------------------------------------- */
 static int derive_timestamp_from_dir(const char *run_dir,
                                      char *out, size_t outsz)
@@ -671,7 +572,7 @@ static int derive_timestamp_from_dir(const char *run_dir,
 }
 
 /* ---------------------------------------------------------------
- * run_benchmark_for_dir()   — RESULTS-MGMT-002
+ * run_benchmark_for_dir()   
  *
  * Attach a benchmark to an EXISTING profiling run directory.
  *
@@ -684,8 +585,6 @@ static int derive_timestamp_from_dir(const char *run_dir,
  *
  * No new timestamp directory is created; profile.json and
  * results.csv are never touched.
- *
- * Returns an exit code (EXIT_SUCCESS / EXIT_FAILURE).
  * --------------------------------------------------------------- */
 static int run_benchmark_for_dir(const char *run_dir)
 {
@@ -732,15 +631,8 @@ static int run_benchmark_for_dir(const char *run_dir)
     }
 
     /*
-     * PHASE-001: a benchmark BELONGS to its profiling run, so it must
+     * a benchmark BELONGS to its profiling run, so it must
      * inherit the existing run_id and timestamp — never mint new ones.
-     *
-     * Decision 2 (legacy fallback): an old profile.json predating this
-     * phase has neither field. Rather than fail, we reconstruct:
-     *   - run_id missing    -> generate a fresh run_id
-     *   - timestamp missing -> recover it from the run directory name
-     * and warn the user that metadata was reconstructed. The old
-     * profile.json is NOT modified.
      */
     if (read_json_string_field(json_path, "run_id",
                                run_id, sizeof(run_id)) != 0 || run_id[0] == '\0') {
@@ -879,9 +771,8 @@ int main(int argc, char *argv[])
     }
 
     /*
-     * RESULTS-MGMT-002: --benchmark-run <run-directory>
-     *
-     * This is a standalone mode: it attaches a benchmark to an existing
+     *--benchmark-run <run-directory>
+     *it attaches a benchmark to an existing
      * profiling run instead of tracing a new program. It reads the
      * program from <run-directory>/profile.json, runs the existing
      * benchmark, and writes benchmark.json into that same directory.
@@ -1027,12 +918,6 @@ int main(int argc, char *argv[])
         }
         printf("\n");
 
-        /*
-         * RESULTS-MGMT-001: create the per-run directory so the benchmark
-         * artifact can be stored alongside other run artifacts. The
-         * benchmark's own logic and console output are unchanged; we only
-         * read back its already-computed numbers via output parameters.
-         */
         make_timestamp(timestamp, sizeof(timestamp));
         make_run_id(run_id, sizeof(run_id));   /* PHASE-001: fresh run */
         {
@@ -1065,9 +950,8 @@ int main(int argc, char *argv[])
         return bench_rc;
     }
 
-    /* ---- Normal tracing mode ---- */
     /*
-     * BUG-006 fix: validate the target executable BEFORE printing any
+     * validate the target executable BEFORE printing any
      * banner or trace UI. Previously a missing program printed the full
      * interface, then failed deep inside the child with "execvp failed".
      * Now we fail cleanly and early with a clear message.
@@ -1102,7 +986,7 @@ int main(int argc, char *argv[])
     printf("\n");
 
     /*
-     * RESULTS-MGMT-001: create this run's output directory
+     * create this run's output directory
      *     <results_dir>/<program>/<timestamp>/
      * Every run gets a fresh timestamped directory, so runs never
      * overwrite each other. profile.json and results.csv are written
@@ -1139,10 +1023,10 @@ int main(int argc, char *argv[])
     output_print_report(stats, stats_count, total);
 
     /*
-     * RESULTS-MGMT-001: automatic artifact export.
+     * automatic artifact export.
      * Every run writes profile.json and results.csv into its run
      * directory by default, so each run is a complete, reproducible
-     * artifact set. This does not change the export formats.
+     * artifact set.
      */
     if (run_dir[0] != '\0') {
         snprintf(auto_json, sizeof(auto_json), "%s/profile.json", run_dir);
@@ -1152,8 +1036,8 @@ int main(int argc, char *argv[])
         output_export_csv(stats, stats_count, auto_csv);
 
         /*
-         * PHASE-001: append this run to the registry catalog. We use
-         * the same count>0 filter as the JSON export (BUG-002) so the
+         * append this run to the registry catalog. We use
+         * the same count>0 filter as the JSON export so the
          * registry totals match profile.json exactly. The catalog key
          * is the program basename (matching the results/<program>/...
          * grouping); the full command stays in profile.json.

@@ -2,14 +2,6 @@
  * output.c
  *
  * Handles all formatted output for the profiler.
- *
- * STEP 2 CHANGES:
- * ---------------
- * - output_trace_line() replaced by output_trace_entry() + output_trace_exit()
- * - Entry prints:  [FILE] openat(AT_FDCWD, "/etc/passwd", O_RDONLY)
- * - Exit  prints:  = 3
- * - Combined line: [FILE] openat(AT_FDCWD, "/etc/passwd", O_RDONLY) = 3
- * - Failed calls:  [NET ] connect(fd=3, addrlen=16) = -1 ECONNREFUSED
  */
 
 #include <stdio.h>
@@ -28,9 +20,6 @@ int show_trace       = 1;
 int export_csv       = 0;
 const char *csv_filename = "syscall_profile.csv";
 
-/* ---------------------------------------------------------------
- * CPRINT macro
- * --------------------------------------------------------------- */
 #define CPRINT(color, fmt, ...) \
     do { \
         if (use_color) printf(color fmt COLOR_RESET, ##__VA_ARGS__); \
@@ -56,11 +45,7 @@ void output_print_header(void)
 /* ---------------------------------------------------------------
  * output_trace_entry()
  *
- * Called at syscall ENTRY. Prints everything up to the ")" but
- * does NOT print a newline — output_trace_exit() closes the line.
- *
- * Example partial output (no newline at end):
- *   [FILE] openat(AT_FDCWD, "/etc/passwd", O_RDONLY)
+ * Called at syscall ENTRY.
  * --------------------------------------------------------------- */
 void output_trace_entry(pid_t child_pid, long syscall_num,
                         const struct user_regs_struct *regs)
@@ -105,12 +90,6 @@ void output_trace_entry(pid_t child_pid, long syscall_num,
  *
  * Called at syscall EXIT. Appends " = retval\n" to the line
  * that output_trace_entry() started.
- *
- * Errors (negative retval) are shown in red with errno name.
- *
- * Example outputs:
- *   " = 3\n"
- *   " = -1 ENOENT\n"   (shown in red)
  * --------------------------------------------------------------- */
 void output_trace_exit(long syscall_num, long retval)
 {
@@ -145,7 +124,7 @@ static int compare_by_count_desc(const void *a, const void *b)
 }
 
 /* ---------------------------------------------------------------
- * print_category_summary()  (unchanged from Step 1)
+ * print_category_summary() 
  * --------------------------------------------------------------- */
 static void print_category_summary(syscall_stat_t *stats, int count,
                                    uint64_t total_calls)
@@ -191,7 +170,7 @@ static void print_category_summary(syscall_stat_t *stats, int count,
 }
 
 /* ---------------------------------------------------------------
- * output_print_report()  (unchanged from Step 1 except column width)
+ * output_print_report()  
  * --------------------------------------------------------------- */
 void output_print_report(syscall_stat_t *stats, int count, uint64_t total_calls)
 {
@@ -212,14 +191,14 @@ void output_print_report(syscall_stat_t *stats, int count, uint64_t total_calls)
     qsort(sorted, count, sizeof(syscall_stat_t), compare_by_count_desc);
 
     /*
-     * BUG-003 fix: when a filter is active, ALL summary statistics
+     * when a filter is active, ALL summary statistics
      * (total syscalls, unique count, category totals, percentages)
      * must reflect the FILTERED dataset, not the full one.
      *
      * We compute the filtered totals once here and pass them down
      * to every part of the report. When no filter is active,
      * filter_should_show() returns 1 for everything, so these values
-     * equal the full dataset — behaviour is unchanged.
+     * equal the full dataset.
      */
     uint64_t filtered_total  = 0;
     int      filtered_unique = 0;
@@ -265,12 +244,6 @@ void output_print_report(syscall_stat_t *stats, int count, uint64_t total_calls)
             /* Skip syscalls excluded by --only or --exclude */
             if (!filter_should_show(s->number)) continue;
 
-            /*
-             * BUG-002 fix: skip syscalls with count == 0.
-             * These are syscalls we saw an ENTRY for but never an EXIT
-             * (e.g. exit_group, which never returns to user space).
-             * Showing them with count=0 and time=0 is misleading.
-             */
             if (s->call_count == 0) continue;
 
             /* Stop after top-N rows if --top=N is set */
@@ -315,16 +288,6 @@ void output_print_report(syscall_stat_t *stats, int count, uint64_t total_calls)
            "  %-22s  %12s\n", "SYSCALL", "AVG(ms)");
 
     {
-        /*
-         * BUG-004 fix: the Top-5-Slowest list must use the SAME
-         * filtered dataset as the rest of the report.
-         *
-         * We first build a compacted array containing only the syscalls
-         * that pass the filter and have a non-zero call count, then run
-         * the selection sort over that filtered array. Previously the
-         * sort ran over the full stats array, so excluded syscalls like
-         * mmap/munmap could still appear here.
-         */
         syscall_stat_t *by_avg =
             (syscall_stat_t *)malloc(count * sizeof(syscall_stat_t));
         if (by_avg) {
@@ -394,13 +357,6 @@ void output_export_csv(syscall_stat_t *stats, int count, const char *filename)
         syscall_category_t cat = get_syscall_category(s->number);
         double total_ms, avg_ms;
 
-        /*
-         * BUG-002 fix: skip syscalls with count == 0.
-         * These were seen at ENTRY but never returned (e.g. exit_group,
-         * which never comes back to user space). Exporting them with
-         * count=0 / time=0.000000 was inconsistent with the terminal
-         * report, which already hides them.
-         */
         if (s->call_count == 0) continue;
 
         total_ms = s->total_time_ns / 1e6;
@@ -416,35 +372,7 @@ void output_export_csv(syscall_stat_t *stats, int count, const char *filename)
 /* ---------------------------------------------------------------
  * output_export_json()
  *
- * Export the full profiling results as a JSON file (P10).
- *
- * FORMAT:
- * -------
- * {
- *   "total_syscalls": 78,
- *   "unique_syscalls": 21,
- *   "syscalls": [
- *     {
- *       "number":    9,
- *       "name":      "mmap",
- *       "category":  "MEM ",
- *       "count":     18,
- *       "total_ms":  2.870000,
- *       "avg_ms":    0.159444
- *     },
- *     ...
- *   ]
- * }
- *
- * WHY JSON:
- * ---------
- * JSON is language-agnostic and directly importable into Python
- * (json module), JavaScript, R, etc. The Python visualizer in Step 6
- * will consume this file. It's also human-readable for inspection.
- *
- * All syscalls are included (no filter applied to the file export
- * itself) so the file is a complete record. Users can filter in
- * their own analysis tools.
+ * Export the full profiling results as a JSON file.
  * --------------------------------------------------------------- */
 void output_export_json(syscall_stat_t *stats, int count,
                         uint64_t total_calls, const char *program,
@@ -464,15 +392,6 @@ void output_export_json(syscall_stat_t *stats, int count,
         return;
     }
 
-    /*
-     * BUG-002 fix: count=0 syscalls (e.g. exit_group, which never
-     * returns to user space) must not appear in the export, AND the
-     * header totals must match the array that follows.
-     *
-     * First pass: compute totals over count>0 entries only, so that
-     * "total_syscalls" and "unique_syscalls" are consistent with the
-     * array and with the terminal report.
-     */
     for (i = 0; i < count; i++) {
         if (stats[i].call_count == 0) continue;
         valid_total += stats[i].call_count;
@@ -480,21 +399,12 @@ void output_export_json(syscall_stat_t *stats, int count,
     }
 
     fprintf(f, "{\n");
-    /*
-     * PHASE-001: run metadata first, so a reader can identify the run
-     * before parsing the syscall payload. Both fields are optional at
-     * the writer level (NULL -> line omitted) to stay compatible with
-     * any caller that doesn't supply them. Everything below is unchanged.
-     */
+    
     if (run_id != NULL)
         fprintf(f, "  \"run_id\": \"%s\",\n", run_id);
     if (timestamp != NULL)
         fprintf(f, "  \"timestamp\": \"%s\",\n", timestamp);
-    /*
-     * VIS-002: record the traced command so the visualizer can show
-     * "Program: ls -la" on the charts. We escape backslashes and
-     * double-quotes so the JSON stays valid for any command string.
-     */
+    
     fprintf(f, "  \"program\": \"");
     if (program != NULL) {
         const char *p;
@@ -524,11 +434,6 @@ void output_export_json(syscall_stat_t *stats, int count,
         total_ms = s->total_time_ns / 1e6;
         avg_ms   = (s->total_time_ns / s->call_count) / 1e6;
 
-        /*
-         * Trailing comma: present on every written entry except the
-         * last one. We use the 'written' counter (not the loop index i)
-         * because skipped count=0 entries make i unreliable here.
-         */
         written++;
         comma = (written < valid_count) ? "," : "";
 
@@ -560,22 +465,8 @@ void output_export_json(syscall_stat_t *stats, int count,
 /* ---------------------------------------------------------------
  * output_export_benchmark_json()
  *
- * RESULTS-MGMT-001: persist a benchmark result as a JSON artifact so
+ * persist a benchmark result as a JSON artifact so
  * it can live in the run directory alongside profile.json / results.csv.
- *
- * This function does NOT compute anything and does NOT change the
- * benchmark's own console output. It only writes the already-measured
- * untraced/traced times (in milliseconds) plus the derived overhead,
- * matching the same overhead definition the benchmark prints.
- *
- * Schema:
- * {
- *   "program":      "ls",
- *   "untraced_ms":  1.145,
- *   "traced_ms":    3.582,
- *   "overhead_pct": 212.8,
- *   "overhead_x":   3.13
- * }
  * --------------------------------------------------------------- */
 void output_export_benchmark_json(const char *program,
                                   double untraced_ms, double traced_ms,
@@ -598,7 +489,7 @@ void output_export_benchmark_json(const char *program,
     }
 
     fprintf(f, "{\n");
-    /* PHASE-001: run metadata first (inherited for --benchmark-run). */
+    
     if (run_id != NULL)
         fprintf(f, "  \"run_id\": \"%s\",\n", run_id);
     if (timestamp != NULL)

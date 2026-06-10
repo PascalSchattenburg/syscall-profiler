@@ -1,24 +1,8 @@
 /* ===================================================================
- * run_registry.c                                          PHASE-003
+ * run_registry.c                                          
  * Run Registry Access Layer
  * ===================================================================
- *
- * Loads results/runs_index.json (written by Phase 001) into an array of
- * RunInfo records and provides lookups plus the Phase 002 artifact
- * bridge. See run_registry.h for the API, the design rationale, and the
- * memory-ownership contract.
- *
- * The parser is a small, dependency-free reader tailored to the exact
- * format the Phase 001 writer (registry_write_entry) produces — the same
- * hand-rolled style as read_json_string_field() elsewhere in the project.
- * It is NOT a general-purpose JSON parser: it relies on the registry
- * being machine-written in the known layout. It is tolerant (a malformed
- * entry is skipped rather than aborting the whole load) and never writes
- * to the file.
- *
- * This module only READS the registry. It scans no run directories and
- * changes nothing about the registry format.
- * =================================================================== */
+ */
 
 #include "run_registry.h"
 #include "run_artifacts.h"
@@ -27,16 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------------ */
-/* Small parsing helpers                                              */
-/* ------------------------------------------------------------------ */
-
-/*
- * Copy a JSON string value into `out`, un-escaping the only escapes the
- * Phase 001 writer emits (\" and \\). `src` must point at the first
- * character *after* the opening quote. Stops at the closing unescaped
- * quote or the NUL terminator. Always NUL-terminates within `outsz`.
- */
 static void copy_json_string(const char *src, char *out, size_t outsz)
 {
     size_t oi = 0;
@@ -144,10 +118,6 @@ static char *read_whole_file(const char *path)
     return buf;
 }
 
-/* ------------------------------------------------------------------ */
-/* Public API                                                         */
-/* ------------------------------------------------------------------ */
-
 RunRegistry registry_load(const char *results_dir)
 {
     RunRegistry reg = { NULL, 0 };
@@ -166,16 +136,14 @@ RunRegistry registry_load(const char *results_dir)
 
     buf = read_whole_file(idx_path);
     if (buf == NULL)
-        return reg;   /* missing/unreadable -> empty registry, no noise */
+        return reg;  
 
     file_end = buf + strlen(buf);
 
     /*
      * Each entry begins with the "run_id" key, so we treat every
      * "run_id" occurrence as the start of a record. The record's other
-     * fields lie between this "run_id" and the next one (or end of file).
-     * This is robust even if a program/path value happens to contain
-     * braces, since we never rely on '{' / '}' matching.
+     * fields lie between this "run_id" and the next one.
      */
     p = buf;
     for (;;) {
@@ -276,6 +244,5 @@ RunArtifacts registry_get_artifacts(const RunInfo *run)
         RunArtifacts empty = { 0, 0, 0 };
         return empty;
     }
-    /* Bridge to Phase 002: artifact state stays dynamic, never stored. */
     return run_detect_artifacts(run->path);
 }
